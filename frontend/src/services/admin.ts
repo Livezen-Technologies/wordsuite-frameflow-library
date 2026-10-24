@@ -2,7 +2,7 @@
 import { api, request } from '@/services/api';
 import { config } from '@/core/config';
 import type { AssetType, Tier, Visibility } from '@/core/schema';
-import type { Asset, AuditEntry, BulkAction, BulkResult, Category, CreateItemResult, Me, Overview, Page, Upload } from '@/types/api';
+import type { Asset, AuditEntry, Job, JobStatus, BulkAction, BulkResult, Category, CreateItemResult, Me, Overview, Page, Upload } from '@/types/api';
 
 export interface AssetListQuery {
   type?: AssetType | '';
@@ -50,6 +50,9 @@ export const adminApi = {
   categories: (type?: AssetType) => api.get<{ data: Category[] }>('/admin/categories', { type }).then((r) => r.data),
   createCategory: (body: { type: AssetType; name: string }) => api.post<Category>('/admin/categories', body),
 
+  jobs: (status?: JobStatus | '') => api.get<{ data: Job[] }>('/admin/jobs', { status: status || undefined }).then((r) => r.data),
+  reprocess: (id: string, version?: string) => api.post<Job>(`/admin/assets/${encodeURIComponent(id)}/reprocess`, version ? { version } : {}),
+
   auditLog: (entityId?: string) => api.get<{ data: AuditEntry[] }>('/admin/audit-log', { entity_id: entityId }).then((r) => r.data),
 };
 
@@ -61,3 +64,8 @@ export const feedApi = {
   publicKey: () => request<string>(`${config.feedBase}/public-key.pem`, { text: true, absolute: true }),
   catalog: (channel: 'stable' | 'beta') => request<{ packs?: unknown[]; [k: string]: unknown }>(`${config.feedBase}/${channel}/catalog.json`, { absolute: true }),
 };
+
+/** URL of a generated preview (served publicly once the asset is live). */
+export function previewUrl(assetId: string, version: string, kind: string, ext: string): string {
+  return `${config.apiOrigin}/previews/${assetId}/${version}/${kind}.${ext}`;
+}

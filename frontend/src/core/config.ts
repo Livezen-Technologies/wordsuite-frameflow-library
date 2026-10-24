@@ -28,3 +28,9 @@ export function absoluteUrl(pathOrUrl: string): string {
     return pathOrUrl;
   }
 }
+
+/** API-relative media paths (/previews/…, /feed/…) resolved against VITE_API_BASE. */
+export function mediaUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return url.startsWith('/') ? `${apiOrigin}${url}` : url;
+}

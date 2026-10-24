@@ -17,7 +17,7 @@ export function ChecksList({ checks, extra = [] }: { checks: Check[]; extra?: { 
     <ul role="list" aria-label="Checks" className="divide-y divide-gray-100 text-sm dark:divide-white/5">
       {checks.map((c, i) => (
         <li key={`${c.check}-${i}`} data-status={c.passed ? 'pass' : 'fail'} className="flex items-start justify-between gap-3 py-2">
-          <span className="text-gray-700 capitalize dark:text-gray-300">{humanize(c.check.replace(/[.]/g, ' '))}</span>
+          <span className="text-gray-700 capitalize dark:text-gray-300">{humanize(c.check.replace(/[.]/g, ' '))}{c.source === 'worker' && <span className="ml-1.5 rounded bg-gray-100 px-1 py-0.5 text-[10px] font-medium text-gray-600 normal-case dark:bg-white/10 dark:text-gray-300">worker</span>}</span>
           {c.passed ? (
             <span className="inline-flex items-center gap-1 text-green-700 dark:text-green-400"><CheckCircleIcon aria-hidden="true" className="size-4" />Passed</span>
           ) : (

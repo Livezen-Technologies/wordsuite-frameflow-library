@@ -55,3 +55,16 @@ describe('Browse library data flow', () => {
     expect(calls.some((c) => c.path === '/api/v1/search/suggest' && c.url.includes('q=te'))).toBe(true);
   });
 });
+
+describe('Generated previews on cards', () => {
+  it('adds the hover MP4 when preview.hover is present', async () => {
+    setToken(null);
+    mockFetch({ 'GET /api/v1/assets': () => ({ data: [asset(1, { thumbnail_url: '/previews/a/1.0.0/thumbnail.webp', preview: { hover: '/previews/a/1.0.0/hover.mp4', thumbnail: '/previews/a/1.0.0/thumbnail.webp' } }), asset(2)], next_cursor: null, total: 2 }) });
+    const { container } = renderAt('/library', <Route path="/library" element={<BrowsePage />} />, { signedIn: false });
+    await screen.findByText('Asset 1');
+    const videos = container.querySelectorAll('video');
+    expect(videos).toHaveLength(1);
+    expect(videos[0]).toHaveAttribute('src', '/previews/a/1.0.0/hover.mp4');
+    expect(container.querySelector('img[src="/previews/a/1.0.0/thumbnail.webp"]')).not.toBeNull();
+  });
+});

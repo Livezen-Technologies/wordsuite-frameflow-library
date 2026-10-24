@@ -1,8 +1,13 @@
-// A7 Processing (checks view). Tailwind Plus: lists/tables (03), elements/badges, feedback/alerts.
-// The API has no jobs endpoint: this shows uploads checked in this tab (GET /admin/uploads/:id refreshes one)
-// plus assets whose status is processing or failed.
+// A7 Processing Jobs. Tailwind Plus: navigation/tabs (08 with badges), lists/tables (03), elements/badges, feedback/alerts.
+// Jobs come from GET /admin/jobs (apps/workers claim and run them); failed or finished ones can be reprocessed.
+// Secondary sections: uploads checked in this tab, and assets whose status is processing or failed.
+import { useState } from 'react';
 import { Link } from 'react-router';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '@/hooks/useAuth';
+import { useNotify } from '@/components/ui/Notifications';
+import { Tabs } from '@/components/ui/Layout';
+import type { Job, JobStatus } from '@/types/api';
 import { adminApi } from '@/services/admin';
 import { errorMessage } from '@/services/api';
 import { useSessionUploads, uploadSession } from '@/services/uploadSession';
@@ -14,6 +19,101 @@ import { TableCard, TBody, EmptyRow, th, td, tdFirst, thFirst } from '@/componen
 import { checkProblem, checksPassed } from '@/components/Checks';
 import { typeName } from '@/core/schema';
 import { classNames, formatBytes, timeAgo } from '@/core/format';
+
+const JOB_TABS: { key: JobStatus | 'all'; name: string }[] = [
+  { key: 'all', name: 'All' },
+  { key: 'queued', name: 'Queued' },
+  { key: 'running', name: 'Running' },
+  { key: 'failed', name: 'Failed' },
+  { key: 'done', name: 'Done' },
+  { key: 'cancelled', name: 'Cancelled' },
+];
+
+/** Poll every 3 s while anything is queued or running. */
+export const jobsRefetchInterval = (jobs: Job[] | undefined): number | false => (jobs?.some((j) => j.status === 'queued' || j.status === 'running') ? 3000 : false);
+
+function JobsSection() {
+  const { can, me } = useAuth();
+  const qc = useQueryClient();
+  const { notify, fail } = useNotify();
+  const [tab, setTab] = useState<JobStatus | 'all'>('all');
+  const [busy, setBusy] = useState<string | null>(null);
+  const all = useQuery({ queryKey: ['jobs', 'all'], queryFn: () => adminApi.jobs(), refetchInterval: (q) => jobsRefetchInterval(q.state.data) });
+  const filtered = useQuery({ queryKey: ['jobs', tab], queryFn: () => adminApi.jobs(tab === 'all' ? '' : tab), enabled: tab !== 'all', refetchInterval: (q) => jobsRefetchInterval(all.data ?? q.state.data) });
+  const assets = useQuery({ queryKey: ['assets', { forJobs: true }], queryFn: () => adminApi.listAssets({}) });
+  const byId = new Map((assets.data?.data ?? []).map((a) => [a.id, a]));
+  const jobs = [...((tab === 'all' ? all.data : filtered.data) ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const counts = Object.fromEntries(JOB_TABS.map((t) => [t.key, t.key === 'all' ? all.data?.length : all.data?.filter((j) => j.status === t.key).length]));
+  const live = jobsRefetchInterval(all.data) !== false;
+
+  const reprocess = async (j: Job) => {
+    setBusy(j.id);
+    try {
+      await adminApi.reprocess(j.asset_id, j.version);
+      notify('Reprocessing queued', `${byId.get(j.asset_id)?.title ?? j.asset_id} v${j.version}`);
+      await qc.invalidateQueries({ queryKey: ['jobs'] });
+      void qc.invalidateQueries({ queryKey: ['asset', j.asset_id] });
+    } catch (e) {
+      fail('Couldn’t reprocess', errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const canEdit = (assetId: string) => can('asset.edit.all') || (can('asset.edit.own') && byId.get(assetId)?.created_by === me?.id);
+
+  return (
+    <section aria-labelledby="jobs-h" className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id="jobs-h" className="text-base font-semibold text-gray-900 dark:text-white">Jobs</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400" role="status">{live ? 'Refreshing every 3 s while jobs are queued or running' : 'Up to date'}</p>
+      </div>
+      <Tabs label="Job status" current={tab} onChange={setTab} tabs={JOB_TABS.map((t) => ({ ...t, count: counts[t.key] }))} />
+      {all.isPending ? <Loading /> : all.isError ? <Alert tone="error">{errorMessage(all.error)}</Alert> : (
+        <TableCard caption="Processing jobs">
+          <thead>
+            <tr>
+              <th scope="col" className={thFirst}>Asset</th>
+              <th scope="col" className={th}>Status</th>
+              <th scope="col" className={classNames(th, 'hidden md:table-cell')}>Attempts</th>
+              <th scope="col" className={classNames(th, 'hidden lg:table-cell')}>Worker</th>
+              <th scope="col" className={classNames(th, 'hidden md:table-cell')}>Previews / error</th>
+              <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>Updated</th>
+              <th scope="col" className={th}><span className="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <TBody>
+            {jobs.map((j) => {
+              const a = byId.get(j.asset_id);
+              return (
+                <tr key={j.id} data-status={j.status}>
+                  <td className={tdFirst}>
+                    <Link to={`/admin/assets/${j.asset_id}`} className="hover:text-indigo-600">{a?.title ?? j.asset_id}</Link>
+                    <span className="block text-xs font-normal text-gray-500 dark:text-gray-400">{typeName(j.type)} · <span className="font-mono">v{j.version}</span></span>
+                  </td>
+                  <td className={td}><StatusBadge status={j.status} /></td>
+                  <td className={classNames(td, 'hidden tabular-nums md:table-cell')}>{j.attempts}</td>
+                  <td className={classNames(td, 'hidden font-mono text-xs lg:table-cell')}>{j.worker_id ?? '—'}</td>
+                  <td className={classNames(td, 'hidden max-w-xs whitespace-normal md:table-cell')}>
+                    {j.error ? <span className="text-red-600 dark:text-red-400">{j.error}</span> : Object.keys(j.previews ?? {}).length ? Object.keys(j.previews).join(', ') : '—'}
+                  </td>
+                  <td className={classNames(td, 'hidden sm:table-cell')}><time dateTime={j.finished_at ?? j.started_at ?? j.created_at}>{timeAgo(j.finished_at ?? j.started_at ?? j.created_at)}</time></td>
+                  <td className={classNames(td, 'text-right')}>
+                    {['failed', 'done', 'cancelled'].includes(j.status) && canEdit(j.asset_id) && (
+                      <Button size="sm" variant={j.status === 'failed' ? 'soft' : 'link'} loading={busy === j.id} onClick={() => void reprocess(j)}>
+                        {j.status === 'failed' ? 'Retry' : 'Reprocess'}<span className="sr-only"> {a?.title ?? j.asset_id} v{j.version}</span>
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {!jobs.length && <EmptyRow colSpan={7}>{tab === 'all' ? 'No jobs yet. Uploading a version queues one; a worker (apps/workers) runs it.' : `No ${tab} jobs.`}</EmptyRow>}
+          </TBody>
+        </TableCard>
+      )}
+    </section>
+  );
+}
 
 export function Processing() {
   const session = useSessionUploads();
@@ -34,14 +134,12 @@ export function Processing() {
 
   return (
     <div className="space-y-8">
-      <PageHeading title="Processing" meta="Upload checks and assets that are processing or failed" />
-      <Alert tone="info" title="Live job list and retry aren’t available yet">
-        The Library API runs checks synchronously on upload and has no jobs endpoint (blueprint A7: <code>GET /admin/jobs</code>, <code>POST /admin/jobs/:id/retry</code>). To retry, upload the file again or upload a new version.
-      </Alert>
+      <PageHeading title="Processing" meta="Worker jobs: previews, deep checks and metadata for each uploaded version" />
+      <JobsSection />
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Uploads this session</h2>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Upload checks in this tab</h2>
           {session.length > 0 && <Button size="sm" variant="secondary" onClick={() => uploadSession.clear()}>Clear</Button>}
         </div>
         <TableCard caption="Uploads checked in this session">

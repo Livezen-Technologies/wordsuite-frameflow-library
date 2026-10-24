@@ -4,7 +4,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { adminApi } from '@/services/admin';
+import { adminApi, previewUrl } from '@/services/admin';
+import { PreviewGallery } from '@/components/Previews';
 import { ApiError, api, errorMessage } from '@/services/api';
 import { useAuth } from '@/hooks/useAuth';
 import { PageHeading, Card, Tabs, TypeTile } from '@/components/ui/Layout';
@@ -103,7 +104,12 @@ export function AssetEditor() {
   const qc = useQueryClient();
   const { me, can } = useAuth();
   const { notify, fail } = useNotify();
-  const q = useQuery({ queryKey: ['asset', id], queryFn: () => adminApi.getAsset(id) });
+  const q = useQuery({
+    queryKey: ['asset', id],
+    queryFn: () => adminApi.getAsset(id),
+    // Follow the worker while the current version is queued or running.
+    refetchInterval: (qq) => (qq.state.data?.versions.some((v) => v.processing && ['queued', 'running'].includes(v.processing.status)) ? 3000 : false),
+  });
   const a = q.data;
   const categories = useQuery({ queryKey: ['categories'], queryFn: () => adminApi.categories() });
   const activity = useQuery({ queryKey: ['audit', id], queryFn: () => adminApi.auditLog(id), enabled: can('analytics.view') });
@@ -138,6 +144,9 @@ export function AssetEditor() {
 
   const current: AssetVersion | undefined = a.versions.find((v) => v.version === (a.pending_version ?? a.current_version)) ?? a.versions.at(-1);
   const actions = availableActions(a, can, editable);
+  const live = a.status === 'published' && ['public', 'unlisted'].includes(a.visibility);
+  const shownVersion = live ? a.versions.find((v) => v.version === a.published_version) ?? current : current;
+  const previewMap = Object.fromEntries(Object.entries(shownVersion?.previews ?? {}).map(([k, p]) => [k, previewUrl(a.id, shownVersion!.version, k, p.ext)]));
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft({ ...draft, [k]: v });
   const refresh = (next?: Asset) => {
     if (next) qc.setQueryData(['asset', id], next);
@@ -362,6 +371,21 @@ export function AssetEditor() {
                 </TBody>
               </TableCard>
 
+              <Card title={`Generated previews${shownVersion ? ` · v${shownVersion.version}` : ''}`}>
+                {Object.keys(previewMap).length ? (
+                  live ? (
+                    <PreviewGallery previews={previewMap} title={a.title} tileClassName="rounded-md outline-1 outline-black/5 dark:outline-white/10" captionClassName="mt-1 text-xs text-gray-500 dark:text-gray-400" />
+                  ) : (
+                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                      <p>Generated: {Object.entries(shownVersion?.previews ?? {}).map(([k, p]) => `${k}.${p.ext} (${formatBytes(p.size)})`).join(', ')}.</p>
+                      <p className="mt-1">The API serves previews only for live assets (<code>/previews/…</code>); they show here once the asset is published.</p>
+                    </div>
+                  )
+                ) : (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{shownVersion?.processing && ['queued', 'running'].includes(shownVersion.processing.status) ? 'A worker is generating previews…' : 'No generated previews for this version.'}</p>
+                )}
+              </Card>
+
               <Card title="Files">
                 <ul role="list" className="divide-y divide-gray-100 text-sm dark:divide-white/5">
                   {(current?.files ?? []).map((f) => (
@@ -441,6 +465,7 @@ export function AssetEditor() {
               </form>
             )}
           </Card>
+          <ProcessingCard asset={a} version={current} editable={editable} onQueued={() => refresh()} />
           <Card title={`Checks · v${current?.version ?? '—'}`}>
             <ChecksList
               checks={current?.checks ?? []}
@@ -571,6 +596,42 @@ function Dependencies({ asset, editable, onSaved }: { asset: Asset; editable: bo
           <TextField className="min-w-60 flex-1" label="Add by asset id or slug" value={ref} onChange={(e) => setRef(e.target.value)} />
           <Button type="submit" variant="secondary" loading={busy}>Add</Button>
         </form>
+      )}
+    </Card>
+  );
+}
+
+function ProcessingCard({ asset, version, editable, onQueued }: { asset: Asset; version: AssetVersion | undefined; editable: boolean; onQueued: () => void }) {
+  const { notify, fail } = useNotify();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const p = version?.processing;
+  const reprocess = async () => {
+    setBusy(true);
+    try {
+      await adminApi.reprocess(asset.id, version?.version);
+      notify('Reprocessing queued', `v${version?.version}`);
+      void qc.invalidateQueries({ queryKey: ['jobs'] });
+      onQueued();
+    } catch (e) {
+      fail('Couldn’t reprocess', errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Processing" actions={<Link to="/admin/processing" className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">Jobs →</Link>}>
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="text-gray-500 dark:text-gray-400">v{version?.version ?? '—'}</span>
+        {p ? <StatusBadge status={p.status} /> : <Badge tone="gray">not queued</Badge>}
+      </div>
+      {p?.error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{p.error}</p>}
+      {p?.finished_at && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Finished {timeAgo(p.finished_at)}</p>}
+      {p && ['queued', 'running'].includes(p.status) && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400" role="status">Waiting for a worker; this page refreshes on its own.</p>}
+      {editable && version && !(p && ['queued', 'running'].includes(p.status)) && (
+        <Button className="mt-3" size="sm" variant={p?.status === 'failed' ? 'soft' : 'secondary'} loading={busy} onClick={() => void reprocess()}>
+          {p?.status === 'failed' ? 'Retry processing' : 'Reprocess'}
+        </Button>
       )}
     </Card>
   );

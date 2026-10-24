@@ -83,3 +83,17 @@ describe('Asset Editor publish flow', () => {
     expect(calls.find((c) => c.method === 'PATCH')!.body).toEqual({ title: 'Teal & Orange' });
   });
 });
+
+describe('Asset Editor processing + previews', () => {
+  it('shows processing status, retry for a failed job, and the generated previews of a live asset', async () => {
+    const user = userEvent.setup();
+    const base = makeAsset();
+    const v = { ...base.versions[0], status: 'published', processing: { status: 'failed' as const, job_id: 'j1', error: 'decode failed' }, previews: { thumbnail: { key: 'k', ext: 'webp', size: 10 }, before_after_1: { key: 'k2', ext: 'webp', size: 10 } }, package: { sha256: 'b', size: 1, signature: '', thumbnail: null, built_at: '' } };
+    setup({ ...base, status: 'published', published_version: '1.0.0', versions: [v] });
+    expect(await screen.findByText('decode failed')).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: /Files & Versions/ }));
+    expect(screen.getByAltText('Teal Orange: Before / after 1')).toHaveAttribute('src', '/previews/as_1/1.0.0/before_after_1.webp');
+    expect(screen.getByRole('button', { name: 'Retry processing' })).toBeInTheDocument();
+  });
+});
+

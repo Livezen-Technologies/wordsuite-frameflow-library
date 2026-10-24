@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   // The Library API: the Node dev server (apps/api) or the CodeIgniter backend, same routes.
   const target = env.VITE_DEV_PROXY_TARGET || 'http://localhost:8787';
-  const proxy = Object.fromEntries(['/api', '/feed'].map((p) => [p, { target, changeOrigin: false }]));
+  const proxy = Object.fromEntries(['/api', '/feed', '/previews'].map((p) => [p, { target, changeOrigin: false }]));
 
   return {
     base: env.VITE_BASE_PATH || '/',

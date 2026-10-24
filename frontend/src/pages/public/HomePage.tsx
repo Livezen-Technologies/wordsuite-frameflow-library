@@ -6,7 +6,6 @@ import { clsx } from 'clsx';
 import { publicApi } from '@/services/public';
 import { config } from '@/core/config';
 import { ASSET_TYPES, TYPE_KEYS, type AssetType } from '@/core/schema';
-import { AnimatedNumber } from '@/components/radiant/animated-number';
 import { AssetCard } from '@/components/radiant/asset-card';
 import { BentoCard } from '@/components/radiant/bento-card';
 import { Button } from '@/components/radiant/button';
@@ -59,7 +58,7 @@ function TypesBento({ counts }: { counts: Partial<Record<AssetType, number>> | n
       </Heading>
       <div className="mt-10 grid grid-cols-1 gap-4 sm:mt-16 sm:grid-cols-2 lg:grid-cols-6">
         {TYPE_KEYS.map((t, i) => (
-          <Link key={t} href={`/library?type=${t}`} className={clsx('lg:col-span-2 flex rounded-lg', SHAPE[i])} aria-label={`${ASSET_TYPES[t].name}: ${counts?.[t] ?? 0} assets`}>
+          <Link key={t} href={`/library?type=${t}`} className={clsx('lg:col-span-2 flex rounded-lg', SHAPE[i])} aria-label={`${ASSET_TYPES[t].name}: ${counts ? (counts[t] ?? 0) : 'loading'} published`}>
             <BentoCard
               eyebrow={ASSET_TYPES[t].short}
               title={ASSET_TYPES[t].name}
@@ -67,8 +66,8 @@ function TypesBento({ counts }: { counts: Partial<Record<AssetType, number>> | n
               graphicClassName="h-40"
               graphic={
                 <div className="flex size-full items-end p-8" style={{ background: `linear-gradient(135deg, ${ASSET_TYPES[t].color}33, ${ASSET_TYPES[t].color}0d)` }}>
-                  <div className="text-6xl font-medium tracking-tight text-gray-950 tabular-nums">
-                    {counts ? <AnimatedNumber start={0} end={counts[t] ?? 0} /> : '—'}
+                  <div data-testid={`count-${t}`} className="text-6xl font-medium tracking-tight text-gray-950 tabular-nums">
+                    {counts ? (counts[t] ?? 0).toLocaleString() : '—'}
                   </div>
                   <span className="ml-3 pb-2 text-sm/6 text-gray-600">published</span>
                 </div>

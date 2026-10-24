@@ -19,7 +19,7 @@ bearer-token auth, errors as `{ error: { code, message, details[] } }`.
 | `/admin/assets` | A2 Asset Library: type tabs, search, status/category/tier/visibility/owner filters, bulk publish / unpublish / tags / category / tier / visibility / archive, load more |
 | `/admin/upload` | A3 Upload Center: drag and drop, per-file checks, type override (re-check), batch defaults, Create drafts |
 | `/admin/assets/:id` | A4 Asset Editor + A5 versions: details, licence & access, files & versions (publish a version, roll back, metadata diff, new version drawer, thumbnail), dependencies, activity; publish / schedule / unpublish / deprecate / archive / submit / approve / reject |
-| `/admin/processing` | A7 (partial): uploads checked this tab + assets processing/failed |
+| `/admin/processing` | A7 Processing Jobs: `GET /admin/jobs` with status tabs, auto-refresh while queued/running, Retry/Reprocess (`POST /admin/assets/:id/reprocess`); plus upload checks in this tab and assets processing/failed |
 | `/admin/review` | A6 Review Queue |
 | `/admin/categories` | A8 Categories (list + add) |
 | `/admin/audit` | Audit log |
@@ -39,7 +39,10 @@ npm run lint
 npm test              # Vitest + Testing Library (jsdom), fetch mocked
 ```
 
-Local API: `cd .. && PORT=8787 node apps/api/src/server.js` (dev token `dev-admin`).
+Local API: `cd .. && PORT=8787 node apps/api/src/server.js` (dev token `dev-admin`). With previews: start the API with
+`LIBRARY_ADMIN_TOKENS="dev-admin:super_admin:admin,wtok:worker:w1"` and run
+`LIBRARY_API_URL=http://localhost:8787 LIBRARY_WORKER_TOKEN=wtok node apps/workers/src/worker.js`.
+The dev/preview proxy and nginx forward `/api`, `/feed` and `/previews`.
 
 ## Environment (build time)
 
@@ -59,7 +62,7 @@ Local API: `cd .. && PORT=8787 node apps/api/src/server.js` (dev token `dev-admi
 
 ## Not available yet (no API)
 
-Processing job list and retry (A7), category reorder/rename/hide/merge tags (A8), collections management (A9),
+category reorder/rename/hide/merge tags (A8), collections management (A9),
 audience rules / plan mapping editor (A10), analytics drill-down (A11), storage/webhook/role settings (A12),
-server-side category/tier/visibility filters on `GET /admin/assets` (applied client-side to loaded rows), and a
-list-uploads endpoint (Processing shows this tab's uploads only).
+server-side category/tier/visibility filters on `GET /admin/assets` (applied client-side to loaded rows),, a
+list-uploads endpoint (Processing shows this tab's uploads only), and an authenticated preview route (`/previews/…` is served only for live assets, so the editor lists generated previews of unpublished versions without showing them).

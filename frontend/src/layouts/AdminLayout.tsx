@@ -96,7 +96,7 @@ export function AdminLayout() {
   };
 
   return (
-    <div className="min-h-dvh bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-dvh bg-gray-50 lg:flex dark:bg-gray-900">
       <a href="#admin-main" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[70] focus:rounded-md focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:shadow">
         Skip to content
       </a>
@@ -120,14 +120,15 @@ export function AdminLayout() {
         </div>
       </Dialog>
 
-      <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
-        <div className="flex grow flex-col gap-y-5 overflow-y-auto border-r border-gray-200 bg-white px-6 pb-4 dark:border-white/10 dark:bg-gray-900">
+      {/* Desktop: the column stretches to the page height (white all the way down); its content sticks to the viewport. */}
+      <div className="hidden border-r border-gray-200 bg-white lg:flex lg:w-72 lg:shrink-0 lg:flex-col dark:border-white/10 dark:bg-gray-900">
+        <div className="sticky top-0 flex h-dvh flex-col gap-y-5 overflow-y-auto px-6 pb-4">
           <Brand />
           <SidebarNav />
         </div>
       </div>
 
-      <div className="lg:pl-72">
+      <div className="min-w-0 flex-1">
         <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-gray-200 bg-white px-4 shadow-xs sm:gap-x-6 sm:px-6 lg:px-8 dark:border-white/10 dark:bg-gray-900 dark:shadow-none">
           <button type="button" onClick={() => setSidebarOpen(true)} className="-m-2.5 p-2.5 text-gray-700 hover:text-gray-900 lg:hidden dark:text-gray-400 dark:hover:text-white">
             <span className="sr-only">Open sidebar</span>

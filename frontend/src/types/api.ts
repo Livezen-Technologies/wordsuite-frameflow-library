@@ -22,6 +22,8 @@ export interface Check {
   check: string;
   passed: boolean;
   detail?: ErrorDetail | null;
+  /** "worker" for checks added by apps/workers after upload. */
+  source?: string;
 }
 
 export interface Upload {
@@ -58,6 +60,25 @@ export interface AssetVersion {
   created_by: string;
   created_at: string;
   retired_at?: string;
+  processing?: { status: JobStatus; job_id: string; error?: string | null; finished_at?: string } | null;
+  previews?: Record<string, { key: string; ext: string; size: number }>;
+}
+
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+export interface Job {
+  id: string;
+  asset_id: string;
+  version: string;
+  type: AssetType;
+  status: JobStatus;
+  attempts: number;
+  lease_until: string | null;
+  worker_id: string | null;
+  error: string | null;
+  previews: Record<string, { key: string; ext: string; size: number }>;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 export interface Category {
@@ -184,6 +205,8 @@ export interface PublicAsset {
   pack_id: string;
   pack_type: string;
   thumbnail_url: string | null;
+  /** Generated previews by kind (hover, audio_preview, waveform, specimen, before_after_N, poster, swatches…) → URL. */
+  preview?: Record<string, string>;
   published_at: string | null;
   stats: { downloads: number; installs: number; favorites: number; applies: number };
 }

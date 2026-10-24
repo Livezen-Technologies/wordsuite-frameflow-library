@@ -17,6 +17,7 @@ import { Link } from '@/components/radiant/link';
 import { Navbar } from '@/components/radiant/navbar';
 import { Heading, Lead, Subheading } from '@/components/radiant/text';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { PreviewGallery, orderedKinds } from '@/components/Previews';
 
 function Meta({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -71,6 +72,14 @@ export function AssetPage() {
                     <div className="absolute -inset-2 rounded-[calc(var(--radius)+8px)] shadow-xs ring-1 ring-black/5" />
                     <AssetThumb asset={a} className="relative aspect-video w-full rounded-(--radius) shadow-2xl ring-1 ring-black/10" />
                   </div>
+                  {a.preview && orderedKinds(a.preview).filter((k) => k !== 'thumbnail').length > 0 && (
+                    <section aria-labelledby="previews-h" className="mt-12">
+                      <h2 id="previews-h" className="text-2xl/8 font-medium tracking-tight text-gray-950">Previews</h2>
+                      <div className="mt-4">
+                        <PreviewGallery previews={Object.fromEntries(Object.entries(a.preview).filter(([k]) => k !== 'thumbnail'))} title={a.title} tileClassName="rounded-2xl ring-1 ring-black/10" captionClassName="mt-2 font-mono text-xs/5 font-semibold tracking-widest text-gray-500 uppercase" />
+                      </div>
+                    </section>
+                  )}
                   {a.tags.length > 0 && (
                     <ul role="list" aria-label="Tags" className="mt-8 flex flex-wrap gap-2">
                       {a.tags.map((tag) => (

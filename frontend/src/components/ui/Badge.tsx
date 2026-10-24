@@ -32,6 +32,10 @@ const STATUS_TONE: Record<string, Tone> = {
   archived: 'gray',
   ready: 'blue',
   retired: 'gray',
+  queued: 'yellow',
+  running: 'blue',
+  done: 'green',
+  cancelled: 'gray',
 };
 
 export function StatusBadge({ status }: { status: string }) {
