@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Production storage: library state in PostgreSQL (`DATABASE_URL`), one row per record with only changed rows written and a writer lock so two servers can't overwrite each other; originals and packages in Cloudflare R2 or any S3-compatible bucket (`LIBRARY_S3_*`), served with resumable ranges. Without them it keeps using a local folder.
+- Hosting on Cloudflare at library.frameflow.worksuitecloud.com: a Docker image run as a Cloudflare Container behind a Worker, and a **Deploy** workflow.
 - Sign-in with Worksuite Cloud (OneAuth): the API verifies OIDC access tokens against the issuer's keys (RS256, ES256, EdDSA; issuer, audience and expiry checked, key rotation handled). The plan comes from the token, and Download Center roles from the `library_roles` claim. Set `LIBRARY_OIDC_ISSUER` (and optionally `LIBRARY_OIDC_AUDIENCE`, `LIBRARY_OIDC_ROLE_CLAIM`); static tokens remain for development and server-to-server use.
 
 - Library API (`apps/api`): uploads with the upload gate (extension, magic bytes, size, archive path and zip-bomb checks), type validation for LUTs, Lottie, SVG/PNG/WebP/GIF, WAV, fonts, brand kits and text templates, drafts, versions that never overwrite, review (approve / reject with reason), publish gate, scheduled publish and unpublish, deprecate, archive, rollback, bulk actions, categories, analytics overview and an audit log of every change with before/after values. Roles follow the blueprint (Super Admin, Library Manager, Content Editor, Reviewer, Analyst).

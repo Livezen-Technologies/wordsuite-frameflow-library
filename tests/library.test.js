@@ -98,7 +98,7 @@ test("publish gate lists every blocker", () => {
 
 async function start() {
 	const dataDir = tmp();
-	const { server, lib } = createServer({ dataDir, tokens: parseTokens("su:super_admin:u1,ed:content_editor:u2,rv:reviewer:u3,mg:library_manager:u4") });
+	const { server, lib } = await createServer({ dataDir, tokens: parseTokens("su:super_admin:u1,ed:content_editor:u2,rv:reviewer:u3,mg:library_manager:u4") });
 	await new Promise((r) => server.listen(0, r));
 	const base = `http://127.0.0.1:${server.address().port}`;
 	const call = async (method, p, { token, body, raw, headers = {} } = {}) => {
@@ -289,7 +289,7 @@ test("OIDC: verified tokens carry plan and admin role; Pro packs need the plan",
 		const head = `${enc({ alg: "RS256", kid: "k1", typ: "JWT" })}.${enc({ iss: issuer, aud: "frameflow-library", exp: Math.floor(Date.now() / 1000) + 600, ...claims })}`;
 		return `${head}.${crypto.sign("sha256", Buffer.from(head), key).toString("base64url")}`;
 	};
-	const { server } = createServer({ dataDir: tmp(), tokens: new Map(), oidc: { issuer }, fetch: fakeFetch });
+	const { server } = await createServer({ dataDir: tmp(), tokens: new Map(), oidc: { issuer }, fetch: fakeFetch });
 	await new Promise((r) => server.listen(0, r));
 	t.after(() => server.close());
 	const base = `http://127.0.0.1:${server.address().port}`;

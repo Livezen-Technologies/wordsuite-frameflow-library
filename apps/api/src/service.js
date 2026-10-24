@@ -24,6 +24,7 @@ import {
 	validateFile,
 } from "../../../packages/asset-schema/index.js";
 import { buildCatalog, buildPackage, generateKeyPair, inspectZip, packIdOf, publicKeyOf, sha256, sign } from "./pack.js";
+import { createFileBlobs, createFileState } from "./storage.js";
 
 /** UUID v7 (time-ordered), §3.1. */
 export function uuid7() {
@@ -62,35 +63,62 @@ const DEFAULT_CATEGORIES = {
 	lottie: ["Social", "Icons", "Loaders"],
 };
 
-export function createLibrary({ dataDir, signingKey = null, now = () => new Date() }) {
-	const dir = (...p) => path.join(dataDir, ...p);
-	for (const d of ["originals", "packages"]) fs.mkdirSync(dir(d), { recursive: true });
-
-	// Signing key: the configured PEM, else a persisted dev key.
-	let privateKey = signingKey;
-	if (!privateKey) {
-		const keyFile = dir("dev-signing-key.pem");
-		if (!fs.existsSync(keyFile)) fs.writeFileSync(keyFile, generateKeyPair().privateKey, { mode: 0o600 });
-		privateKey = fs.readFileSync(keyFile, "utf8");
-	}
-	const publicKey = publicKeyOf(privateKey);
-
-	const dbFile = dir("library.json");
-	let db = fs.existsSync(dbFile) ? JSON.parse(fs.readFileSync(dbFile, "utf8")) : null;
+/**
+ * The library, loaded from `state` with files in `blobs` (storage.js).
+ * Defaults: a JSON file and a folder under `dataDir`.
+ */
+export async function createLibrary({ dataDir, signingKey = null, now = () => new Date(), blobs = createFileBlobs(dataDir), state = createFileState(path.join(dataDir, "library.json")) }) {
+	let db = await state.load();
 	if (!db) {
 		db = { seq: 0, assets: [], categories: [], uploads: {}, sync_events: [], audit_log: [], downloads: [], usage: [], collections: [] };
 		for (const [type, names] of Object.entries(DEFAULT_CATEGORIES))
 			names.forEach((name, i) => db.categories.push({ id: uuid7(), type, name, slug: slugify(name), parent_id: null, sort: i, icon: null, visible: true }));
 	}
+
+	// Signing key: the configured PEM, else a development key kept with the
+	// state (a dev-signing-key.pem from older versions is picked up).
+	let privateKey = signingKey;
+	if (!privateKey) {
+		const legacy = dataDir ? path.join(dataDir, "dev-signing-key.pem") : null;
+		db.dev_signing_key ??= legacy && fs.existsSync(legacy) ? fs.readFileSync(legacy, "utf8") : generateKeyPair().privateKey;
+		privateKey = db.dev_signing_key;
+	}
+	const publicKey = publicKeyOf(privateKey);
+
+	// Writes go out in order, one at a time; `flush()` waits for them. A
+	// failed write stays pending and is retried with the next one.
+	let writing = Promise.resolve();
+	let dirty = false;
+	let writeError = null;
 	const save = () => {
-		const tmp = `${dbFile}.tmp`;
-		fs.writeFileSync(tmp, JSON.stringify(db));
-		fs.renameSync(tmp, dbFile);
+		dirty = true;
+		writing = writing.then(async () => {
+			if (!dirty) return;
+			dirty = false;
+			try {
+				await state.write(db);
+				writeError = null;
+			} catch (e) {
+				dirty = true;
+				writeError = e;
+				console.error("Library state write failed:", e.message);
+			}
+		});
+		return writing;
+	};
+	const flush = async () => {
+		await writing;
+		if (writeError) throw writeError;
 	};
 	save();
+	await flush();
 
 	const iso = () => now().toISOString();
-	const readFile = (sha) => fs.readFileSync(dir("originals", sha));
+	const readOriginal = async (sha) => {
+		const buf = await blobs.get(`originals/${sha}`);
+		if (!buf) throw new Error(`Original ${sha} is missing from storage`);
+		return buf;
+	};
 
 	function audit(actor, action, entity, id, before, after, ip = null) {
 		db.audit_log.push({ id: uuid7(), actor_id: actor?.id ?? null, actor_role: actor?.role ?? null, action, entity, entity_id: id, diff: diffOf(before, after), ip, at: iso() });
@@ -162,7 +190,7 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 	}
 
 	/** Stores raw bytes and runs the checks for the given or detected type. */
-	function upload(actor, { filename, buf, type = null }) {
+	async function upload(actor, { filename, buf, type = null }) {
 		requirePerm(actor, "asset.create");
 		if (!filename || !buf?.length) throw new ValidationError("A file is required.", [{ field: "file", rule: "file.required", value: null }]);
 		const sha = sha256(buf);
@@ -171,24 +199,24 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		const duplicate = db.assets.find((a) => a.versions.some((v) => v.files.some((f) => f.sha256 === sha)));
 		const id = uuid7();
 		db.uploads[id] = { id, filename, sha256: sha, size: buf.length, type: detected, checks, meta, duplicate_of: duplicate?.id ?? null, created_by: actor.id, created_at: iso() };
-		if (!fs.existsSync(dir("originals", sha))) fs.writeFileSync(dir("originals", sha), buf);
+		if (!(await blobs.has(`originals/${sha}`))) await blobs.put(`originals/${sha}`, buf);
 		save();
 		return db.uploads[id];
 	}
 
 	/** An upload checked as `type`: re-validated when that isn't the type it was checked as. */
-	function uploadAs(id, type) {
+	async function uploadAs(id, type) {
 		const up = mustUpload(id);
 		if (!type || up.type === type) return up;
-		Object.assign(up, { type }, runChecks({ filename: up.filename, buf: readFile(up.sha256), type }));
+		Object.assign(up, { type }, runChecks({ filename: up.filename, buf: await readOriginal(up.sha256), type }));
 		return up;
 	}
 	const mustUpload = (id) => db.uploads[id] ?? (() => { throw notFound(`Upload ${id}`); })();
 
 	// ---------- assets ----------
 
-	function newVersion(asset, { version, uploadId, thumbnailUploadId, changelog = "", is_breaking = false, actor }) {
-		const up = uploadAs(uploadId, asset.type);
+	async function newVersion(asset, { version, uploadId, thumbnailUploadId, changelog = "", is_breaking = false, actor }) {
+		const up = await uploadAs(uploadId, asset.type);
 		const files = [{ role: "main", filename: up.filename, sha256: up.sha256, size: up.size }];
 		if (thumbnailUploadId) {
 			const t = mustUpload(thumbnailUploadId);
@@ -217,10 +245,10 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		return v;
 	}
 
-	function createAsset(actor, body) {
+	async function createAsset(actor, body) {
 		requirePerm(actor, "asset.create");
 		const type = body.type ?? mustUpload(body.upload_id).type;
-		const up = uploadAs(body.upload_id, type);
+		const up = await uploadAs(body.upload_id, type);
 		const title = body.title ?? up.filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
 		const slug = body.slug ?? slugify(title);
 		const category = body.category_id ? db.categories.find((c) => c.id === body.category_id) : db.categories.find((c) => c.type === type);
@@ -271,7 +299,7 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 			published_by: null,
 			published_at: null,
 		};
-		const v = newVersion(asset, { version: body.version ?? "1.0.0", uploadId: up.id, thumbnailUploadId: body.thumbnail_upload_id, actor });
+		const v = await newVersion(asset, { version: body.version ?? "1.0.0", uploadId: up.id, thumbnailUploadId: body.thumbnail_upload_id, actor });
 		asset.current_version = v.version;
 		asset.status = v.status === "failed" ? "failed" : body.submit_for_review ? "ready_for_review" : "draft";
 		db.assets.push(asset);
@@ -312,7 +340,7 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		return asset;
 	}
 
-	function addVersion(actor, id, body) {
+	async function addVersion(actor, id, body) {
 		const asset = mustAsset(id);
 		requirePerm(actor, "asset.edit", asset);
 		const latest = asset.versions.map((v) => v.version).sort(compareSemver).at(-1);
@@ -320,7 +348,7 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		if (!SEMVER.test(version)) throw new ValidationError("Version must be semver.", [{ field: "version", rule: "semver", value: version }]);
 		if (asset.versions.some((v) => v.version === version)) throw new ValidationError("That version already exists; versions never overwrite.", [{ field: "version", rule: "version.unique", value: version }]);
 		if (compareSemver(version, latest) <= 0) throw new ValidationError(`New versions must be above ${latest}.`, [{ field: "version", rule: "version.increase", value: version }]);
-		const v = newVersion(asset, { version, uploadId: body.upload_id, thumbnailUploadId: body.thumbnail_upload_id, changelog: body.changelog, is_breaking: body.is_breaking, actor });
+		const v = await newVersion(asset, { version, uploadId: body.upload_id, thumbnailUploadId: body.thumbnail_upload_id, changelog: body.changelog, is_breaking: body.is_breaking, actor });
 		asset.current_version = v.version;
 		// A new version goes back through review unless the asset is already live and the actor can publish directly.
 		if (asset.status === "published" || asset.status === "deprecated") asset.pending_version = v.version;
@@ -355,21 +383,24 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		return asset;
 	}
 
-	function packageVersion(asset, v) {
-		const built = buildPackage(asset, v, { category: categoryOf(asset), readFile });
+	async function packageVersion(asset, v) {
+		// buildPackage reads synchronously, so the version's files are fetched first.
+		const shas = [...new Set([...v.files.map((f) => f.sha256), ...(asset.thumbnail_file ? [asset.thumbnail_file.sha256] : [])])];
+		const files = new Map(await Promise.all(shas.map(async (sha) => [sha, await readOriginal(sha)])));
+		const built = buildPackage(asset, v, { category: categoryOf(asset), readFile: (sha) => files.get(sha) });
 		const base = `${packIdOf(asset)}-${v.version}`;
-		fs.writeFileSync(dir("packages", `${base}.zip`), built.zip);
+		await blobs.put(`packages/${base}.zip`, built.zip, "application/zip");
 		let thumbnail = null;
 		if (built.thumbnail) {
 			const ext = built.thumbnail.path.match(/\.[a-z0-9]+$/)[0];
-			fs.writeFileSync(dir("packages", `${base}${ext}`), built.thumbnail.data);
+			await blobs.put(`packages/${base}${ext}`, built.thumbnail.data, ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "application/octet-stream");
 			thumbnail = { ext };
 		}
 		v.package = { sha256: built.sha256, size: built.size, signature: sign(built.sha256, privateKey), thumbnail, built_at: iso() };
 		v.status = "published";
 	}
 
-	function publish(actor, id, { publish_at = null, version = null } = {}) {
+	async function publish(actor, id, { publish_at = null, version = null } = {}) {
 		const asset = mustAsset(id);
 		requirePerm(actor, "asset.publish");
 		const direct = can(actor.role, "asset.publish.direct");
@@ -388,7 +419,7 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 			return asset;
 		}
 		const previous = asset.published_version;
-		packageVersion(asset, v);
+		await packageVersion(asset, v);
 		for (const old of asset.versions) if (old !== v && old.status === "published") Object.assign(old, { status: "retired", retired_at: iso() });
 		asset.status = "published";
 		asset.current_version = v.version;
@@ -430,11 +461,11 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		return asset;
 	}
 
-	function bulk(actor, { ids = [], action, payload = {} }) {
+	async function bulk(actor, { ids = [], action, payload = {} }) {
 		const results = [];
 		for (const id of ids) {
 			try {
-				if (action === "publish") publish(actor, id);
+				if (action === "publish") await publish(actor, id);
 				else if (action === "unpublish") unpublish(actor, id);
 				else if (action === "archive") unpublish(actor, id, { op: "archive" });
 				else if (action === "tag_add") updateAsset(actor, id, { tags: [...mustAsset(id).tags, ...normalizeTags(payload.tags)] });
@@ -452,13 +483,13 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 	}
 
 	/** Runs scheduled publish/unpublish (§3.1 publish_at / unpublish_at). */
-	function runSchedule() {
+	async function runSchedule() {
 		const system = { id: "system", role: "super_admin" };
 		for (const a of db.assets) {
 			if (a.publish_at && new Date(a.publish_at) <= now() && a.status !== "published") {
 				try {
 					a.publish_at = null;
-					publish(system, a.id);
+					await publish(system, a.id);
 				} catch {
 					/* stays scheduled-failed; visible in checks */
 				}
@@ -641,10 +672,12 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 	}
 
 	/** Path of a package file, or null. Names come from the catalog. */
-	function packageFile(name) {
+	/** Blob key and size of a package file, or null. Names come from the catalog. */
+	async function packageFile(name) {
 		if (!/^[a-z0-9][a-z0-9-]{0,63}-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.(zip|png|webp|gif|jpg)$/.test(name)) return null;
-		const p = dir("packages", name);
-		return fs.existsSync(p) ? p : null;
+		const key = `packages/${name}`;
+		const head = await blobs.head(key);
+		return head ? { key, ...head } : null;
 	}
 
 	/** Licence tier of the asset a package zip belongs to (thumbnails are always public). */
@@ -729,6 +762,12 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		],
 		feed,
 		packageFile,
+		streamBlob: (key, range) => blobs.stream(key, range),
+		flush,
+		close: async () => {
+			await flush();
+			await state.close?.();
+		},
 		packageTier,
 		verifyDownloadToken: (file, expires, sig) => {
 			try {

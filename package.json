@@ -4,10 +4,20 @@
 	"private": true,
 	"type": "module",
 	"description": "FrameFlow Asset Library & Download Center: Library API, admin web, shared asset schema and JS SDK.",
-	"engines": { "node": ">=22" },
+	"engines": {
+		"node": ">=22"
+	},
 	"scripts": {
 		"start": "node apps/api/src/server.js",
 		"dev": "node --watch apps/api/src/server.js",
-		"test": "node --test tests/*.test.js"
+		"test": "node --test --test-concurrency=1 tests/*.test.js"
+	},
+	"dependencies": {
+		"pg": "^8.23.1"
+	},
+	"devDependencies": {
+		"@aws-crypto/sha256-js": "^5.2.0",
+		"@smithy/signature-v4": "^5.7.4",
+		"s3rver": "^3.7.1"
 	}
 }

@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { ValidationError } from "../../../packages/asset-schema/index.js";
 import { createOidcVerifier, planRank } from "./auth.js";
 import { HttpError, createLibrary } from "./service.js";
+import { storageFromEnv } from "./storage.js";
 
 const ADMIN_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "admin-web");
 const SCHEMA_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "packages", "asset-schema", "index.js");
@@ -84,6 +85,30 @@ function serveFile(req, res, file, extra = {}) {
 	fs.createReadStream(file).pipe(res);
 }
 
+/** Serves a stored blob ({ key, size, etag }) with ETag and single-range support. */
+async function serveBlob(req, res, lib, blob, extra = {}) {
+	const headers = { "Content-Type": MIME[path.extname(blob.key)] ?? "application/octet-stream", "Accept-Ranges": "bytes", ...(blob.etag ? { ETag: blob.etag } : {}), ...extra };
+	if (blob.etag && req.headers["if-none-match"] === blob.etag) return send(res, 304, "", headers);
+	let start = 0;
+	let end = blob.size - 1;
+	const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
+	let status = 200;
+	if (range && (range[1] || range[2])) {
+		start = range[1] ? Number(range[1]) : blob.size - Number(range[2]);
+		end = range[1] && range[2] ? Number(range[2]) : blob.size - 1;
+		start = Math.max(0, start);
+		end = Math.min(end, blob.size - 1);
+		if (start > end) return send(res, 416, "", { ...headers, "Content-Range": `bytes */${blob.size}` });
+		status = 206;
+		headers["Content-Range"] = `bytes ${start}-${end}/${blob.size}`;
+	}
+	res.writeHead(status, { ...headers, "Content-Length": end - start + 1 });
+	if (req.method === "HEAD" || blob.size === 0) return res.end();
+	const stream = await lib.streamBlob(blob.key, { start, end });
+	stream.on("error", () => res.destroy());
+	stream.pipe(res);
+}
+
 /** Tiny router: [method, /path/:param, handler]. */
 function route(routes, method, pathname) {
 	for (const [m, pattern, handler] of routes) {
@@ -100,15 +125,17 @@ function route(routes, method, pathname) {
  * `oidc`: { issuer, audience?, roleClaim? } (LIBRARY_OIDC_ISSUER, …_AUDIENCE,
  * …_ROLE_CLAIM). Without it, dev mode: clients may claim a plan with X-Plan.
  */
-export function createServer({
+export async function createServer({
 	dataDir,
+	blobs,
+	state,
 	signingKey = process.env.LIBRARY_SIGNING_KEY || null,
 	tokens = parseTokens(process.env.LIBRARY_ADMIN_TOKENS),
 	oidc = process.env.LIBRARY_OIDC_ISSUER ? { issuer: process.env.LIBRARY_OIDC_ISSUER, audience: process.env.LIBRARY_OIDC_AUDIENCE || undefined, roleClaim: process.env.LIBRARY_OIDC_ROLE_CLAIM || undefined } : null,
 	fetch: fetchImpl,
 	now,
 } = {}) {
-	const lib = createLibrary({ dataDir, signingKey, now });
+	const lib = await createLibrary({ dataDir, signingKey, now, ...(blobs ? { blobs } : {}), ...(state ? { state } : {}) });
 	const verifier = oidc ? createOidcVerifier({ ...oidc, fetch: fetchImpl, now: now ? () => now().getTime() : undefined }) : null;
 	/** Who is calling: a static token's admin, a verified OIDC user, or null. */
 	async function principalOf(req) {
@@ -156,7 +183,18 @@ export function createServer({
 		["GET", `${A}/admin/assets`, ({ query }) => lib.adminList(Object.fromEntries(query))],
 		["POST", `${A}/admin/assets`, async ({ req, actor }) => {
 			const body = await json(req);
-			if (Array.isArray(body.items)) return { data: body.items.slice(0, 200).map((item) => { try { return { ok: true, asset: lib.createAsset(actor, { ...body.defaults, ...item }) }; } catch (e) { return { ok: false, upload_id: item.upload_id, error: { code: e.code, message: e.message, details: e.details } }; } }) };
+			if (Array.isArray(body.items)) {
+				// One at a time, so slug uniqueness holds within a batch.
+				const data = [];
+				for (const item of body.items.slice(0, 200)) {
+					try {
+						data.push({ ok: true, asset: await lib.createAsset(actor, { ...body.defaults, ...item }) });
+					} catch (e) {
+						data.push({ ok: false, upload_id: item.upload_id, error: { code: e.code, message: e.message, details: e.details } });
+					}
+				}
+				return { data };
+			}
 			return lib.createAsset(actor, body);
 		}],
 		["GET", `${A}/admin/assets/:id`, ({ params }) => lib.getAsset(params.id)],
@@ -190,7 +228,7 @@ export function createServer({
 			const feed = /^\/feed\/(stable|beta)\/(catalog\.json(?:\.sig)?|packs\/([^/]+))$/.exec(pathname);
 			if (feed && (req.method === "GET" || req.method === "HEAD")) {
 				if (feed[3]) {
-					const file = lib.packageFile(feed[3]);
+					const file = await lib.packageFile(feed[3]);
 					if (!file) return send(res, 404, "Not found");
 					// Pro and above: a signed-in plan that covers the tier, or a download grant's signed URL.
 					const tier = lib.packageTier(feed[3]);
@@ -199,9 +237,9 @@ export function createServer({
 						const who = granted ? null : await principalOf(req);
 						if (!granted && planRank(clientOf(req, who).plan) < planRank(tier))
 							return send(res, who ? 403 : 401, { error: { code: who ? "NOT_ENTITLED" : "UNAUTHENTICATED", message: `This pack needs a ${tier} plan.`, details: [], request_id: requestId } });
-						return serveFile(req, res, file, { "Cache-Control": "private, no-store" });
+						return serveBlob(req, res, lib, file, { "Cache-Control": "private, no-store" });
 					}
-					return serveFile(req, res, file, { "Cache-Control": "public, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*" });
+					return serveBlob(req, res, lib, file, { "Cache-Control": "public, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*" });
 				}
 				const f = lib.feed(feed[1]);
 				const headers = { ETag: f.etag, "Cache-Control": "no-cache", "Access-Control-Allow-Origin": "*" };
@@ -227,8 +265,10 @@ export function createServer({
 			// Admin endpoints need a library role (static token or the OIDC role claim).
 			const actor = who?.role ? who : null;
 			if (ADMIN_READ.test(pathname) && !actor) throw new HttpError(who ? 403 : 401, who ? "FORBIDDEN" : "UNAUTHENTICATED", who ? "Your account has no Download Center role." : "Sign in first.");
-			lib.runSchedule();
+			await lib.runSchedule();
 			const out = await hit.handler({ req, params: hit.params, query: url.searchParams, actor, who });
+			// Changes are stored before the response says they happened.
+			if (req.method !== "GET") await lib.flush();
 			const body = JSON.stringify(out);
 			if (req.method === "GET") {
 				const etag = `"${crypto.createHash("sha256").update(body).digest("hex").slice(0, 27)}"`;
@@ -250,11 +290,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 	const port = Number(process.env.PORT) || 8787;
 	const dataDir = process.env.LIBRARY_DATA_DIR || path.join(process.cwd(), "data");
 	const tokens = parseTokens(process.env.LIBRARY_ADMIN_TOKENS || "dev-admin:super_admin:admin");
-	const { server, lib } = createServer({ dataDir, tokens });
+	const { server, lib } = await createServer({ dataDir, tokens, ...(await storageFromEnv({ dataDir })) });
 	server.listen(port, () => {
 		console.log(`FrameFlow Library on http://localhost:${port}  (admin: /admin/, feed: /feed/stable/catalog.json)`);
 		if (!process.env.LIBRARY_ADMIN_TOKENS) console.log("Dev admin token: dev-admin");
-		if (!process.env.LIBRARY_SIGNING_KEY) console.log(`Dev signing key in ${dataDir}. Point FrameFlow at it with:\n  WSC_ASSET_URL=http://localhost:${port}/feed WSC_ASSET_PUBLIC_KEY="$(curl -s http://localhost:${port}/feed/public-key.pem)"`);
+		if (!process.env.LIBRARY_SIGNING_KEY) console.log(`No LIBRARY_SIGNING_KEY: using a development key kept with the library state. Point FrameFlow at it with:\n  WSC_ASSET_URL=http://localhost:${port}/feed WSC_ASSET_PUBLIC_KEY="$(curl -s http://localhost:${port}/feed/public-key.pem)"`);
 	});
-	setInterval(() => lib.runSchedule(), 60_000).unref();
+	setInterval(() => lib.runSchedule().catch((e) => console.error("Schedule run failed:", e.message)), 60_000).unref();
+	for (const signal of ["SIGTERM", "SIGINT"])
+		process.once(signal, () => {
+			server.close();
+			lib.close().finally(() => process.exit(0));
+		});
 }

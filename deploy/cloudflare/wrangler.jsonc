@@ -1,0 +1,22 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "frameflow-library",
+	"main": "worker.js",
+	"compatibility_date": "2025-10-01",
+	"containers": [
+		{
+			"class_name": "LibraryContainer",
+			"image": "../../Dockerfile",
+			"image_build_context": "../..",
+			"max_instances": 1,
+			"instance_type": "standard"
+		}
+	],
+	"durable_objects": {
+		"bindings": [{ "name": "LIBRARY", "class_name": "LibraryContainer" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["LibraryContainer"] }],
+	// The worksuitecloud.com zone must be in the same Cloudflare account.
+	"routes": [{ "pattern": "library.frameflow.worksuitecloud.com", "custom_domain": true }],
+	"observability": { "enabled": true }
+}

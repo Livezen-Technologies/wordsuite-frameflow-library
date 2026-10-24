@@ -31,6 +31,17 @@ Environment:
 | `LIBRARY_DATA_DIR` | state + files, default `./data` |
 | `LIBRARY_ADMIN_TOKENS` | `token:role:userId,…` with roles `super_admin`, `library_manager`, `content_editor`, `reviewer`, `analyst`. Default (dev only): `dev-admin:super_admin:admin` |
 | `LIBRARY_SIGNING_KEY` | PEM Ed25519 private key that signs the catalog. Production: the same key as FrameFlow's `ASSET_SIGNING_KEY`, so the app's built-in public key verifies it. Unset: a dev key is created in the data dir |
+| `LIBRARY_OIDC_ISSUER` | Worksuite Cloud / OneAuth issuer. Enables sign-in: access tokens are verified against its keys; plan from the token, Download Center roles from `library_roles` (`LIBRARY_OIDC_AUDIENCE`, default `frameflow-library`; `LIBRARY_OIDC_ROLE_CLAIM`) |
+| `DATABASE_URL` | PostgreSQL for the library state (one row per record, single writer via an advisory lock). Unset: `library.json` in the data dir |
+| `LIBRARY_S3_ENDPOINT`, `LIBRARY_S3_BUCKET`, `LIBRARY_S3_ACCESS_KEY_ID`, `LIBRARY_S3_SECRET_ACCESS_KEY` | R2 or S3 for originals and packages (`LIBRARY_S3_REGION`, default `auto`; `LIBRARY_S3_PREFIX`). Unset: files in the data dir |
+
+## Hosting
+
+`library.frameflow.worksuitecloud.com` runs on Cloudflare: a Worker in front
+of one Container built from the `Dockerfile` (`deploy/cloudflare/`), with
+PostgreSQL for state and R2 for files. Add the secrets listed at the top of
+`.github/workflows/deploy.yml`, then run **Actions → Deploy**. One container
+instance on purpose: it holds the database's writer lock.
 
 ## Wiring with FrameFlow
 
@@ -92,6 +103,6 @@ sync event.
 
 ## What v1 doesn't do yet
 
-- OneAuth/OIDC sign-in and device registration: admin access is by bearer token, and the client API takes the plan from `X-Plan` (dev). The feed itself is public (packs are signed and hashed), so Pro packs are gated by FrameFlow's plan check, not by the server.
+- Device registration and device limits per plan.
 - tus chunked uploads (uploads are single requests up to 2 GB), ClamAV (recorded as not configured unless `CLAMAV_HOST` is set), FFmpeg/fontTools/shader workers and generated previews: image assets are their own thumbnail, other types need an uploaded one.
-- Favorites, download history and installs mirror (`/me/*` beyond usage), SSE push, Meilisearch, PostgreSQL. State is one JSON document shaped like the §16 tables.
+- Favorites, download history and installs mirror (`/me/*` beyond usage), SSE push, Meilisearch. One API instance at a time (the PostgreSQL writer lock); scaling out needs per-request transactions instead of the in-memory state.
