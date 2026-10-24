@@ -33,25 +33,20 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
-          extensions: intl, sodium, pdo_pgsql, pgsql, sqlite3, zip
+          extensions: intl, sodium, pdo_pgsql, pgsql, sqlite3, zip, curl
           tools: composer:v2
       - name: Backend (CodeIgniter) unit tests
         working-directory: backend
         run: |
           composer install --no-interaction --no-progress
           vendor/bin/phpunit --no-coverage
-      - name: API suite against the CodeIgniter backend (SQLite, then PostgreSQL)
+      - name: Acceptance suite against the backend (SQLite, then PostgreSQL)
         run: |
-          npm run test:php
-          LIBRARY_PHP_DATABASE_URL=postgres://postgres:postgres@localhost:5432/library_test npm run test:php
+          npm test
+          LIBRARY_PHP_DATABASE_URL=postgres://postgres:postgres@localhost:5432/library_test npm test
         env:
           FRAMEFLOW_DIR: ${{ github.workspace }}/worksuite-frameflow
-      - run: npm test
-        env:
-          FRAMEFLOW_DIR: ${{ github.workspace }}/worksuite-frameflow
-          LIBRARY_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/library_test
       - name: Docker images build
         run: |
-          docker build -t frameflow-library .
-          docker build -f apps/workers/Dockerfile -t frameflow-library-worker .
           docker build -t frameflow-library-api backend
+          docker build -f apps/workers/Dockerfile -t frameflow-library-worker .

@@ -2,6 +2,7 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { Link, type LinkProps } from 'react-router';
 import { classNames } from '@/core/format';
+import { t } from '@/i18n';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'success' | 'soft' | 'link';
 type Size = 'sm' | 'md';
@@ -50,7 +51,7 @@ export function Spinner({ className = 'size-5' }: { className?: string }) {
   );
 }
 
-export function Loading({ label = 'Loading…' }: { label?: string }) {
+export function Loading({ label = t('Loading…') }: { label?: string }) {
   return (
     <div role="status" className="flex items-center gap-2 py-10 text-sm text-gray-500 dark:text-gray-400">
       <Spinner />

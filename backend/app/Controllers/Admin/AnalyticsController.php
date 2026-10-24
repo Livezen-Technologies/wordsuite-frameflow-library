@@ -9,7 +9,17 @@ class AnalyticsController extends BaseApiController
 {
     protected function overview()
     {
-        return $this->lib->overview();
+        return $this->lib->overview($this->query());
+    }
+
+    protected function asset(string $id)
+    {
+        return $this->lib->assetAnalytics($this->actor(), $id, $this->query());
+    }
+
+    protected function search()
+    {
+        return $this->lib->searchAnalytics();
     }
 
     protected function auditLog()

@@ -4,12 +4,13 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ChevronRightIcon, ChevronDownIcon } from '@heroicons/react/20/solid';
 import { classNames } from '@/core/format';
+import { t } from '@/i18n';
 
 export function PageHeading({ title, meta, actions, breadcrumbs }: { title: ReactNode; meta?: ReactNode; actions?: ReactNode; breadcrumbs?: { name: string; to?: string }[] }) {
   return (
     <div>
       {breadcrumbs && (
-        <nav aria-label="Breadcrumb" className="mb-2">
+        <nav aria-label={t('Breadcrumb')} className="mb-2">
           <ol role="list" className="flex flex-wrap items-center gap-x-2 text-sm">
             {breadcrumbs.map((b, i) => (
               <li key={i} className="flex items-center gap-x-2">

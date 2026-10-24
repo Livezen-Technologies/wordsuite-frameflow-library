@@ -4,11 +4,10 @@ React 19 + TypeScript (strict) + Vite 7 + Tailwind CSS v4, React Router 7, TanSt
 
 | Surface | Routes | Built from |
 |---|---|---|
-| Public site | `/`, `/library`, `/library/:slug`, `/pricing`, `/login` | Tailwind Plus **Radiant** components (`src/components/radiant/`), client API `/api/v1/*` |
+| Public site | `/`, `/library`, `/library/category/:type`, `/library/:slug`, `/collections`, `/pricing`, `/download`, `/whats-new`, `/blog`, `/help`, `/creators`, `/about`, `/contact`, `/licence`, `/login`, `/signup`, `/account/*`, `/auth/callback` | FrameFlow Library design (Radiant look; `src/components/site/`, `src/pages/site/`). Editable copy with no API source: `src/content/site.ts`, `src/content/blog/*.md` |
 | Download Center admin (blueprint §11) | `/admin/*` (lazy chunk) | Tailwind Plus **Application UI v4.3** (`src/components/ui/`, `src/layouts/AdminLayout.tsx`), admin API `/api/v1/admin/*` |
 
-It talks to the Library API (`apps/api/src/server.js`, being ported to CodeIgniter in `backend/` with the same routes):
-bearer-token auth, errors as `{ error: { code, message, details[] } }`.
+It talks to the Library API (CodeIgniter, `backend/`): OIDC or bearer-token auth, errors as `{ error: { code, message, details[] } }`.
 
 ## Admin screens
 
@@ -39,9 +38,9 @@ npm run lint
 npm test              # Vitest + Testing Library (jsdom), fetch mocked
 ```
 
-Local API: `cd .. && PORT=8787 node apps/api/src/server.js` (dev token `dev-admin`). With previews: start the API with
+Local API: `cd ../backend && php spark serve --port 8787` (see `backend/README.md` for dev tokens). With previews: set
 `LIBRARY_ADMIN_TOKENS="dev-admin:super_admin:admin,wtok:worker:w1"` and run
-`LIBRARY_API_URL=http://localhost:8787 LIBRARY_WORKER_TOKEN=wtok node apps/workers/src/worker.js`.
+`LIBRARY_API_URL=http://localhost:8787 LIBRARY_WORKER_TOKEN=wtok node ../apps/workers/src/worker.js`.
 The dev/preview proxy and nginx forward `/api`, `/feed` and `/previews`.
 
 ## Environment (build time)
@@ -51,7 +50,8 @@ The dev/preview proxy and nginx forward `/api`, `/feed` and `/previews`.
 | `VITE_API_BASE` | `''` (same origin) | Origin of the Library API; requests go to `${VITE_API_BASE}/api/v1/…` |
 | `VITE_FEED_BASE` | `${VITE_API_BASE}/feed` | FrameFlow feed root shown in Settings |
 | `VITE_BASE_PATH` | `/` | Router basename and Vite `base` |
-| `VITE_OIDC_ISSUER` | — | Shows "Continue with Worksuite Cloud" (redirect not implemented yet) |
+| `VITE_OIDC_ISSUER` | — | OIDC issuer (Authorization Code + PKCE). Unset = development token sign-in |
+| `VITE_OIDC_CLIENT_ID` | — | Public client id; redirect URI `<origin><base>/auth/callback` |
 | `VITE_FRAMEFLOW_DOWNLOAD_URL` | `https://updates.worksuitecloud.com/apps/frameflow` | Target of every "Get FrameFlow" button |
 | `VITE_DEV_PROXY_TARGET` | `http://localhost:8787` | dev/preview proxy target |
 
@@ -60,9 +60,13 @@ The dev/preview proxy and nginx forward `/api`, `/feed` and `/previews`.
 `docker build -t frameflow-web . && docker run -p 8080:8080 -e LIBRARY_API_UPSTREAM=http://host.docker.internal:8787 frameflow-web`
 — nginx serves `dist/` and proxies `/api` and `/feed` to `LIBRARY_API_UPSTREAM`.
 
-## Not available yet (no API)
+## Languages
 
-category reorder/rename/hide/merge tags (A8), collections management (A9),
-audience rules / plan mapping editor (A10), analytics drill-down (A11), storage/webhook/role settings (A12),
-server-side category/tier/visibility filters on `GET /admin/assets` (applied client-side to loaded rows),, a
-list-uploads endpoint (Processing shows this tab's uploads only), and an authenticated preview route (`/previews/…` is served only for live assets, so the editor lists generated previews of unpublished versions without showing them).
+English, Sinhala and Tamil in `src/i18n/{en,si,ta}.json`, keyed by the English text (`t('Save changes')`, typed). After adding copy run
+`npm run i18n` (rebuilds en.json, lists keys missing in si/ta); `src/test/i18n.test.ts` fails on any missing key or placeholder.
+Fonts are self-hosted in `public/fonts` (Inter Tight, Noto Sans Sinhala, Noto Sans Tamil from @fontsource, SIL OFL).
+
+## Contract endpoints (docs/api-v1-additions.md)
+
+Collections, category update/delete/reorder, tag merge, settings, analytics, webhooks, admin previews and `/me/*`. Screens show an
+error state while an endpoint isn't live. Browse filters for aspect, duration and features apply to the loaded page (no API parameter).

@@ -41,6 +41,7 @@ export function mockFetch(routes: Record<string, Handler>) {
     if (!hit) return new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: `No mock for ${method} ${path}`, details: [] } }), { status: 404 });
     const out = hit.h(call) as { status?: number; body: unknown } | undefined;
     const res = out && typeof out === 'object' && 'body' in out ? out : { status: 200, body: out };
+    if (res.status === 204) return new Response(null, { status: 204 });
     return new Response(JSON.stringify(res.body), { status: res.status ?? 200, headers: { 'Content-Type': 'application/json' } });
   });
   vi.stubGlobal('fetch', fn);

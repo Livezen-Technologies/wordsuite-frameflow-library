@@ -9,6 +9,7 @@
  */
 import { config } from '@/core/config';
 import type { ApiErrorBody, ErrorDetail } from '@/types/api';
+import { msg, t, type MessageKey } from '@/i18n';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -40,9 +41,20 @@ export function describeDetail(d: ErrorDetail): string {
   return `${d.rule ?? 'invalid'}${value}`;
 }
 
+/** Error codes with a message of our own (shown instead of the API's English text). */
+const CODE_MESSAGES: Record<string, MessageKey> = {
+  DEVICE_LIMIT: msg('You’ve reached the device limit for your plan. Revoke a device you no longer use, then try again.'),
+  DEVICE_REQUIRED: msg('Downloads need a registered FrameFlow device. Sign in from the FrameFlow app first.'),
+  CATEGORY_IN_USE: msg('This category still has assets. Move them to another category before deleting it.'),
+  UNAUTHENTICATED: msg('Your session has ended. Sign in again.'),
+  NETWORK_ERROR: msg('Can’t reach the server. Check your connection and try again.'),
+};
+
 /** One-line message for toasts: message plus the failing rules. */
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) {
+    const own = CODE_MESSAGES[e.code];
+    if (own) return e.code === 'DEVICE_LIMIT' && e.details[0]?.value != null ? `${t(own)} (${t('Limit: {n}', { n: Number(e.details[0].value) })})` : t(own);
     const rules = e.details.map((d) => d.rule).filter(Boolean);
     return rules.length ? `${e.message} (${[...new Set(rules)].join(', ')})` : e.message;
   }
@@ -105,7 +117,7 @@ async function parseError(res: Response): Promise<ApiError> {
   }
   const err = body?.error;
   const fallback = res.status === 401 ? 'UNAUTHENTICATED' : res.status === 403 ? 'FORBIDDEN' : res.status === 404 ? 'NOT_FOUND' : res.status >= 500 ? 'SERVER_ERROR' : 'HTTP_ERROR';
-  return new ApiError(res.status, err?.code ?? fallback, err?.message ?? `Request failed (${res.status})`, Array.isArray(err?.details) ? err.details : [], err?.request_id ?? res.headers.get('X-Request-Id'));
+  return new ApiError(res.status, err?.code ?? fallback, err?.message ?? t('Request failed ({status})', { status: res.status }), Array.isArray(err?.details) ? err.details : [], err?.request_id ?? res.headers.get('X-Request-Id'));
 }
 
 export interface RequestOptions {
@@ -120,11 +132,13 @@ export interface RequestOptions {
   text?: boolean;
   /** Full URL / path outside the API base (e.g. the feed). */
   absolute?: boolean;
+  /** Return the body as a Blob (authenticated previews). */
+  blob?: boolean;
 }
 
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const method = opts.method ?? 'GET';
-  const headers: Record<string, string> = { Accept: opts.text ? 'text/plain, */*' : 'application/json', ...opts.headers };
+  const headers: Record<string, string> = { Accept: opts.text ? 'text/plain, */*' : opts.blob ? '*/*' : 'application/json', ...opts.headers };
   const token = tokenGetter();
   if (token) headers.Authorization = `Bearer ${token}`;
   let body: BodyInit | null = null;
@@ -137,7 +151,13 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
   if (method !== 'GET') headers['Idempotency-Key'] ??= newKey();
   const url = opts.absolute ? buildUrl(path, opts.query, '') : buildUrl(path, opts.query);
-  const res = await transport({ method, url, headers, body, signal: opts.signal });
+  let res: Response;
+  try {
+    res = await transport({ method, url, headers, body, signal: opts.signal });
+  } catch (e) {
+    if ((e as Error)?.name === 'AbortError') throw e;
+    throw new ApiError(0, 'NETWORK_ERROR', t('Can’t reach the server. Check your connection and try again.'));
+  }
   if (!res.ok) {
     const err = await parseError(res);
     if (res.status === 401) onUnauthorized?.();
@@ -145,6 +165,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
   if (res.status === 204) return undefined as T;
   if (opts.text) return (await res.text()) as T;
+  if (opts.blob) return (await res.blob()) as T;
   const text = await res.text();
   return (text ? JSON.parse(text) : undefined) as T;
 }
@@ -153,6 +174,8 @@ export const api = {
   get: <T>(path: string, query?: Query, o: Omit<RequestOptions, 'method' | 'query'> = {}) => request<T>(path, { ...o, query }),
   post: <T>(path: string, body: unknown = {}, o: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(path, { ...o, method: 'POST', body }),
   patch: <T>(path: string, body: unknown, o: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(path, { ...o, method: 'PATCH', body }),
+  put: <T>(path: string, body?: unknown, o: Omit<RequestOptions, 'method' | 'body'> = {}) => request<T>(path, { ...o, method: 'PUT', body }),
+  del: <T = void>(path: string, o: Omit<RequestOptions, 'method'> = {}) => request<T>(path, { ...o, method: 'DELETE' }),
   /** Raw file body with `X-Filename` (POST /admin/uploads). */
   upload: <T>(path: string, file: File | Blob, filename: string, query?: Query) =>
     request<T>(path, { method: 'POST', raw: file, query, headers: { 'X-Filename': encodeURIComponent(filename), 'Content-Type': (file as File).type || 'application/octet-stream' } }),

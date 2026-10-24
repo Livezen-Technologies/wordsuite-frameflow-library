@@ -37,7 +37,7 @@ describe('Upload Center flow', () => {
     expect(uploads[0].headers.Authorization).toBe('Bearer dev-admin');
     expect(within(files).getByLabelText('Type for teal-orange.cube')).toHaveValue('lut');
 
-    expect(screen.getByText(/1 file is uploading, blocked or need a type/)).toBeInTheDocument();
+    expect(screen.getByText(/1 file is uploading, blocked or needs a type/)).toBeInTheDocument();
     await user.type(screen.getByLabelText('Tags'), 'wedding, cinematic');
     await user.selectOptions(screen.getByLabelText('Category'), 'cat_lut');
     await user.click(screen.getByRole('button', { name: 'Create 1 draft' }));

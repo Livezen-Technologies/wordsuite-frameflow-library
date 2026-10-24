@@ -3,21 +3,52 @@
 	"name": "frameflow-library",
 	"main": "worker.js",
 	"compatibility_date": "2025-10-01",
+	// The built admin + public site (VITE_BASE_PATH=/library npm --prefix ../../frontend run build).
+	// Every request runs the Worker first to take /library off; what isn't an API path is
+	// served from here, with index.html for client-side routes.
+	"assets": {
+		"directory": "../../frontend/dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": true
+	},
 	"containers": [
 		{
+			// The Library API: CodeIgniter 4 on nginx + php-fpm (backend/Dockerfile).
 			"class_name": "LibraryContainer",
-			"image": "../../Dockerfile",
+			"image": "../../backend/Dockerfile",
+			"image_build_context": "../../backend",
+			"max_instances": 1,
+			"instance_type": "standard-1"
+		},
+		{
+			// Processing worker (apps/workers): FFmpeg + Chromium, polls the API for jobs.
+			"class_name": "ProcessorContainer",
+			"image": "../../apps/workers/Dockerfile",
 			"image_build_context": "../..",
 			"max_instances": 1,
-			"instance_type": "standard"
+			"instance_type": "standard-2"
 		}
 	],
 	"durable_objects": {
-		"bindings": [{ "name": "LIBRARY", "class_name": "LibraryContainer" }]
+		"bindings": [
+			{ "name": "LIBRARY", "class_name": "LibraryContainer" },
+			{ "name": "PROCESSOR", "class_name": "ProcessorContainer" }
+		]
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["LibraryContainer"] }],
-	// The worksuitecloud.com zone must be in the same Cloudflare account. The
-	// web editor serves the rest of frameflow.worksuitecloud.com.
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["LibraryContainer"] },
+		{ "tag": "v2", "new_sqlite_classes": ["ProcessorContainer"] }
+	],
+	// Every 5 minutes: keep the processing worker running and the API awake (its
+	// scheduler and webhook queue run inside the API container).
+	"triggers": { "crons": ["*/5 * * * *"] },
+	"vars": {
+		"database.default.DBDriver": "Postgre",
+		"LIBRARY_PUBLIC_URL": "https://frameflow.worksuitecloud.com/library"
+	},
+	// The worksuitecloud.com zone must be in the same Cloudflare account. The web
+	// editor's Worker serves the rest of frameflow.worksuitecloud.com.
 	"routes": [{ "pattern": "frameflow.worksuitecloud.com/library*", "zone_name": "worksuitecloud.com" }],
 	"observability": { "enabled": true }
 }

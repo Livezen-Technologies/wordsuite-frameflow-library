@@ -187,8 +187,20 @@ final class PackBuilder
         $entries = array_values(array_filter($entries, static fn ($e) => ! empty($e['version']['package'])));
         $coll    = class_exists(\Collator::class) ? new \Collator('root') : null;
         usort($entries, static fn ($a, $b) => $coll ? $coll->compare($a['asset']['slug'], $b['asset']['slug']) : strcmp($a['asset']['slug'], $b['asset']['slug']));
+        $packIds = [];
+        foreach ($entries as $e) {
+            $packIds[$e['asset']['id']] = self::packIdOf($e['asset']);
+        }
         $packs = [];
         foreach ($entries as ['asset' => $asset, 'version' => $version, 'category' => $category]) {
+            // FrameFlow installs these packs first; dependencies missing from this channel are left out.
+            $deps = [];
+            foreach ((array) ($asset['dependencies'] ?? []) as $d) {
+                $did = is_array($d) ? ($d['asset_id'] ?? null) : null;
+                if (is_string($did) && isset($packIds[$did]) && $did !== $asset['id']) {
+                    $deps[] = $packIds[$did];
+                }
+            }
             $id    = self::packIdOf($asset);
             $base  = "packs/{$id}-{$version['version']}";
             $thumb = $version['package']['thumbnail'] ?? null;
@@ -212,6 +224,7 @@ final class PackBuilder
                 'assetIds'       => [$asset['slug']],
                 'libraryAssetId' => $asset['id'],
                 'libraryType'    => $asset['type'],
+                'dependencies'   => array_values(array_unique($deps)),
             ];
         }
 

@@ -2,6 +2,7 @@
 
 namespace Config;
 
+use App\Libraries\Search\MeiliSearch;
 use App\Libraries\Storage\BlobStoreInterface;
 use App\Libraries\Storage\StorageFactory;
 use App\Services\AuthContext;
@@ -30,7 +31,14 @@ class Services extends BaseService
         }
         $cfg = config(Library::class);
         $lib = new LibraryService(new LibraryStore(), static::blobs(), $cfg->signingKey);
-        $lib->requireProcessing = getenv('LIBRARY_REQUIRE_PROCESSING') === '1';
+        $lib->requireProcessing    = getenv('LIBRARY_REQUIRE_PROCESSING') === '1';
+        $lib->envCorsOrigins       = $cfg->corsOrigins;
+        $lib->search               = MeiliSearch::fromEnv();
+        $lib->webhooksAllowPrivate = getenv('LIBRARY_WEBHOOKS_ALLOW_PRIVATE') === '1';
+        $backoff                   = (string) getenv('LIBRARY_WEBHOOKS_BACKOFF');
+        if (preg_match('/^\d+(,\d+)*$/', $backoff)) {
+            $lib->webhookBackoff = array_map('intval', explode(',', $backoff));
+        }
 
         return $lib;
     }

@@ -1,7 +1,7 @@
 /**
- * Session token storage. Today the token is entered by hand (static admin tokens, `LIBRARY_ADMIN_TOKENS`);
- * a OneAuth OIDC access token goes through the same path: `startOidcSignIn()` will redirect to the issuer
- * and the callback route will call `setToken(accessToken)`.
+ * Session token storage. The access token comes from the OIDC sign-in (services/oidc.ts) or, in development
+ * builds without `VITE_OIDC_ISSUER`, is entered by hand (static tokens, `LIBRARY_ADMIN_TOKENS`).
+ * It lives in memory and in sessionStorage (this tab only).
  */
 import { config } from '@/core/config';
 import { setTokenGetter } from '@/services/api';
@@ -33,12 +33,7 @@ setTokenGetter(getToken);
 
 export type SignInMethod = 'token' | 'oidc';
 
-/** Which sign-in methods the screen offers. */
+/** OIDC when an issuer is configured; otherwise (development) the access-token form. */
 export function signInMethods(): SignInMethod[] {
-  return config.oidcIssuer ? ['oidc', 'token'] : ['token'];
-}
-
-/** OIDC authorization-code + PKCE redirect. Not implemented yet: the API already verifies OneAuth tokens. */
-export function startOidcSignIn(): never {
-  throw new Error('Sign-in with Worksuite Cloud is not set up in this build yet. Use an access token.');
+  return config.oidcIssuer ? ['oidc'] : ['token'];
 }

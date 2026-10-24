@@ -15,18 +15,23 @@ import { Processing } from './Processing';
 import { Categories } from './Categories';
 import { AuditLog } from './AuditLog';
 import { Settings } from './Settings';
+import { Collections } from './Collections';
+import { CollectionEditor } from './CollectionEditor';
+import { AccessTiers } from './AccessTiers';
+import { Analytics } from './Analytics';
+import { t, tr } from '@/i18n';
 
 function RequireSignIn({ children }: { children: ReactNode }) {
-  const { status } = useAuth();
+  const { status, isAdmin } = useAuth();
   const loc = useLocation();
-  if (status === 'loading') return <div className="px-6"><Loading label="Checking your session…" /></div>;
-  if (status === 'signed-out') return <Navigate to={`/admin/sign-in?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
+  if (status === 'loading') return <div className="px-6"><Loading label={t('Checking your session…')} /></div>;
+  if (status === 'signed-out' || !isAdmin) return <Navigate to={`/admin/sign-in?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
   return <>{children}</>;
 }
 
 export function Guard({ perm, children }: { perm: Permission; children: ReactNode }) {
   const { can } = useAuth();
-  if (!can(perm)) return <Alert tone="warn" title="You don’t have access to this page">Your role doesn’t include <code>{perm}</code>. Ask a Super Admin if you need it.</Alert>;
+  if (!can(perm)) return <Alert tone="warn" title={t('You don’t have access to this page')}>{tr('Your role doesn’t include {perm}. Ask a Super Admin if you need it.', { perm: <code>{perm}</code> })}</Alert>;
   return <>{children}</>;
 }
 
@@ -48,9 +53,14 @@ export default function AdminApp() {
         <Route path="processing" element={<Guard perm="asset.create"><Processing /></Guard>} />
         <Route path="review" element={<Guard perm="asset.review"><ReviewQueue /></Guard>} />
         <Route path="categories" element={<Categories />} />
+        <Route path="collections" element={<Guard perm="taxonomy.manage"><Collections /></Guard>} />
+        <Route path="collections/new" element={<Guard perm="taxonomy.manage"><CollectionEditor /></Guard>} />
+        <Route path="collections/:slug" element={<Guard perm="taxonomy.manage"><CollectionEditor /></Guard>} />
+        <Route path="analytics" element={<Guard perm="analytics.view"><Analytics /></Guard>} />
+        <Route path="access" element={<Guard perm="settings.manage"><AccessTiers /></Guard>} />
         <Route path="audit" element={<Guard perm="analytics.view"><AuditLog /></Guard>} />
         <Route path="settings" element={<Settings />} />
-        <Route path="*" element={<Alert tone="warn" title="Page not found">That admin page doesn’t exist.</Alert>} />
+        <Route path="*" element={<Alert tone="warn" title={t('Page not found')}>{t('That admin page doesn’t exist.')}</Alert>} />
       </Route>
     </Routes>
   );

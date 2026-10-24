@@ -13,7 +13,8 @@ import { Alert } from '@/components/ui/Alert';
 import { Checkbox, NativeSelect, SelectField, TextField } from '@/components/ui/Form';
 import { useNotify } from '@/components/ui/Notifications';
 import { checkProblem, checksPassed } from '@/components/Checks';
-import { ASSET_TYPES, SEMVER, TIERS, TYPE_KEYS, VISIBILITIES, typeName, type AssetType, type Tier, type Visibility } from '@/core/schema';
+import { ASSET_TYPES, SEMVER, TIERS, TYPE_KEYS, VISIBILITIES, label, tierLabel, typeName, type AssetType, type Tier, type Visibility } from '@/core/schema';
+import { t, tn } from '@/i18n';
 import { classNames, formatBytes } from '@/core/format';
 import type { CreateItemResult, Upload } from '@/types/api';
 
@@ -92,8 +93,8 @@ export function UploadCenter() {
       const { data } = await adminApi.createDrafts(d, ready.map((r) => ({ upload_id: r.upload!.id, type: r.type! })));
       setResults(data);
       const bad = data.filter((x) => !x.ok);
-      if (bad.length) fail(`${data.length - bad.length} drafts created; ${bad.length} failed`, bad[0].error?.message);
-      else notify(`${data.length} draft${data.length === 1 ? '' : 's'} created`);
+      if (bad.length) fail(t('{done} drafts created; {failed} failed', { done: data.length - bad.length, failed: bad.length }), bad[0].error?.message);
+      else notify(tn('{n} draft created', '{n} drafts created', data.length));
       // Results come back in item order.
       const createdUploads = new Set(ready.filter((_r, i) => data[i]?.ok).map((r) => r.key));
       setRows((rs) => rs.filter((r) => !createdUploads.has(r.key)));
@@ -101,7 +102,7 @@ export function UploadCenter() {
       void qc.invalidateQueries({ queryKey: ['audit'] });
       void qc.invalidateQueries({ queryKey: ['overview'] });
     } catch (e) {
-      fail('Couldn’t create drafts', errorMessage(e));
+      fail(t('Couldn’t create drafts'), errorMessage(e));
     } finally {
       setCreating(false);
     }
@@ -109,7 +110,7 @@ export function UploadCenter() {
 
   return (
     <div className="space-y-6">
-      <PageHeading title="Upload Center" meta="Drop files, check them, then create drafts in one go." />
+      <PageHeading title={t('Upload Center')} meta={t('Drop files, check them, then create drafts in one go.')} />
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
           <div
@@ -123,17 +124,17 @@ export function UploadCenter() {
               <CloudArrowUpIcon aria-hidden="true" className="mx-auto size-12 text-gray-300 dark:text-gray-600" />
               <div className="mt-4 flex flex-wrap justify-center text-sm/6 text-gray-600 dark:text-gray-400">
                 <label htmlFor={inputId} className="relative cursor-pointer rounded-md bg-transparent font-semibold text-indigo-600 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-indigo-600 hover:text-indigo-500 dark:text-indigo-400">
-                  <span>Choose files</span>
+                  <span>{t('Choose files')}</span>
                   <input id={inputId} type="file" multiple accept={ACCEPT} className="sr-only" onChange={(e) => { add(e.target.files); e.target.value = ''; }} />
                 </label>
-                <p className="pl-1">or drag and drop</p>
+                <p className="pl-1">{t('or drag and drop')}</p>
               </div>
               <p className="text-xs/5 text-gray-600 dark:text-gray-400">PNG, SVG, WebP, WAV, MP3, .cube, TTF/OTF/WOFF2, GIF, Lottie JSON, .fftext, .fftemplate, .ffx, .ffbrand</p>
             </div>
           </div>
 
           {rows.length > 0 && (
-            <ul role="list" aria-label="Files" className="divide-y divide-gray-100 overflow-hidden rounded-lg bg-white shadow-sm outline-1 outline-black/5 dark:divide-white/5 dark:bg-gray-800/50 dark:outline-white/10">
+            <ul role="list" aria-label={t('Files')} className="divide-y divide-gray-100 overflow-hidden rounded-lg bg-white shadow-sm outline-1 outline-black/5 dark:divide-white/5 dark:bg-gray-800/50 dark:outline-white/10">
               {rows.map((r) => {
                 const st = rowState(r);
                 const failed = r.upload?.checks.filter((c) => !c.passed) ?? [];
@@ -146,19 +147,19 @@ export function UploadCenter() {
                         <div className={classNames('h-full rounded-full transition-all', st === 'uploading' ? 'w-1/3 animate-pulse bg-indigo-500' : st === 'valid' ? 'w-full bg-green-500' : st === 'needs-type' ? 'w-full bg-amber-400' : 'w-full bg-red-500')} />
                       </div>
                       <p className="mt-1 text-xs" role="status">
-                        {st === 'uploading' && <span className="text-gray-500">Uploading and checking…</span>}
+                        {st === 'uploading' && <span className="text-gray-500">{t('Uploading and checking…')}</span>}
                         {st === 'error' && <span className="text-red-600 dark:text-red-400">{r.error}</span>}
-                        {st === 'needs-type' && <span className="text-amber-700 dark:text-amber-400">Pick a type for this file.</span>}
-                        {st === 'blocked' && <span className="text-red-600 dark:text-red-400">Blocked · {checkProblem(failed[0])}</span>}
-                        {st === 'valid' && <span className="text-green-700 dark:text-green-400">Valid{r.upload?.duplicate_of ? ' · duplicate of an existing asset' : ''}</span>}
+                        {st === 'needs-type' && <span className="text-amber-700 dark:text-amber-400">{t('Pick a type for this file.')}</span>}
+                        {st === 'blocked' && <span className="text-red-600 dark:text-red-400">{t('Blocked · {problem}', { problem: checkProblem(failed[0]) })}</span>}
+                        {st === 'valid' && <span className="text-green-700 dark:text-green-400">{r.upload?.duplicate_of ? t('Valid · duplicate of an existing asset') : t('Valid')}</span>}
                       </p>
                     </div>
                     <span className="text-xs text-gray-500 tabular-nums dark:text-gray-400">{formatBytes(r.file.size)}</span>
-                    <NativeSelect aria-label={`Type for ${r.file.name}`} value={r.type ?? ''} disabled={r.busy} onChange={(e) => void send(r, (e.target.value || null) as AssetType | null)} className="w-40">
-                      <option value="">Type…</option>
-                      {TYPE_KEYS.map((t) => <option key={t} value={t}>{typeName(t)}</option>)}
+                    <NativeSelect aria-label={t('Type for {file}', { file: r.file.name })} value={r.type ?? ''} disabled={r.busy} onChange={(e) => void send(r, (e.target.value || null) as AssetType | null)} className="w-40">
+                      <option value="">{t('Type…')}</option>
+                      {TYPE_KEYS.map((k) => <option key={k} value={k}>{typeName(k)}</option>)}
                     </NativeSelect>
-                    <Button size="sm" variant="link" onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}>Remove<span className="sr-only"> {r.file.name}</span></Button>
+                    <Button size="sm" variant="link" onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}>{t('Remove')}<span className="sr-only"> {r.file.name}</span></Button>
                   </li>
                 );
               })}
@@ -166,26 +167,26 @@ export function UploadCenter() {
           )}
 
           {results && (
-            <Alert tone={results.every((x) => x.ok) ? 'success' : 'warn'} title={`${results.filter((x) => x.ok).length} of ${results.length} drafts created`}
-              items={results.map((x, i) => x.ok && x.asset ? <span key={i}><Link className="font-medium underline" to={`/admin/assets/${x.asset.id}`}>{x.asset.title}</Link> · {x.asset.status.replace(/_/g, ' ')}</span> : <span key={i}>Failed: {x.error?.message}</span>)}
+            <Alert tone={results.every((x) => x.ok) ? 'success' : 'warn'} title={t('{done} of {total} drafts created', { done: results.filter((x) => x.ok).length, total: results.length })}
+              items={results.map((x, i) => x.ok && x.asset ? <span key={i}><Link className="font-medium underline" to={`/admin/assets/${x.asset.id}`}>{x.asset.title}</Link> · {label(x.asset.status)}</span> : <span key={i}>{t('Failed:')} {x.error?.message}</span>)}
             >
-              <Link to="/admin/assets" className="font-medium underline">Go to the Asset Library</Link>
+              <Link to="/admin/assets" className="font-medium underline">{t('Go to the Asset Library')}</Link>
             </Alert>
           )}
         </div>
 
-        <Card title="Defaults for this batch" className="self-start">
+        <Card title={t('Defaults for this batch')} className="self-start">
           <form className="space-y-5" onSubmit={(e) => { e.preventDefault(); void createDrafts(); }}>
-            <TextField label="Tags" hint="Comma separated" placeholder="wedding, cinematic" value={defaults.tags} onChange={(e) => setDefaults({ ...defaults, tags: e.target.value })} />
-            <SelectField label="Category" value={defaults.category_id} disabled={!singleType} onChange={(e) => setDefaults({ ...defaults, category_id: e.target.value })} options={[['', singleType ? 'First category for the type' : 'Per type (mixed batch)'], ...catOptions.map((c): [string, string] => [c.id, c.name])]} hint={singleType ? undefined : 'Categories are per type; pick one when every file has the same type.'} />
-            <SelectField label="Licence tier" value={defaults.licence_tier} onChange={(e) => setDefaults({ ...defaults, licence_tier: e.target.value as Tier })} options={TIERS.map((t) => [t, t])} />
-            <SelectField label="Visibility" value={defaults.visibility} onChange={(e) => setDefaults({ ...defaults, visibility: e.target.value as Visibility })} options={VISIBILITIES.map((t) => [t, t])} />
-            <TextField label="Min FrameFlow version" value={defaults.min_app_version} error={versionOk ? undefined : 'Use semver, e.g. 1.0.0'} onChange={(e) => setDefaults({ ...defaults, min_app_version: e.target.value })} />
-            <Checkbox label="Submit for review" description="Drafts go straight to the Review Queue." checked={defaults.submit_for_review} onChange={(e) => setDefaults({ ...defaults, submit_for_review: e.target.checked })} />
+            <TextField label={t('Tags')} hint={t('Comma separated')} placeholder="wedding, cinematic" value={defaults.tags} onChange={(e) => setDefaults({ ...defaults, tags: e.target.value })} />
+            <SelectField label={t('Category')} value={defaults.category_id} disabled={!singleType} onChange={(e) => setDefaults({ ...defaults, category_id: e.target.value })} options={[['', singleType ? t('First category for the type') : t('Per type (mixed batch)')], ...catOptions.map((c): [string, string] => [c.id, c.name])]} hint={singleType ? undefined : t('Categories are per type; pick one when every file has the same type.')} />
+            <SelectField label={t('Licence tier')} value={defaults.licence_tier} onChange={(e) => setDefaults({ ...defaults, licence_tier: e.target.value as Tier })} options={TIERS.map((x) => [x, tierLabel(x)])} />
+            <SelectField label={t('Visibility')} value={defaults.visibility} onChange={(e) => setDefaults({ ...defaults, visibility: e.target.value as Visibility })} options={VISIBILITIES.map((x) => [x, label(x)])} />
+            <TextField label={t('Min FrameFlow version')} value={defaults.min_app_version} error={versionOk ? undefined : t('Use semver, e.g. 1.0.0')} onChange={(e) => setDefaults({ ...defaults, min_app_version: e.target.value })} />
+            <Checkbox label={t('Submit for review')} description={t('Drafts go straight to the Review Queue.')} checked={defaults.submit_for_review} onChange={(e) => setDefaults({ ...defaults, submit_for_review: e.target.checked })} />
             <Button type="submit" className="w-full" disabled={!ready.length || !versionOk} loading={creating}>
-              Create {ready.length} draft{ready.length === 1 ? '' : 's'}
+              {tn('Create {n} draft', 'Create {n} drafts', ready.length)}
             </Button>
-            {skipped > 0 && <p className="text-xs text-gray-500 dark:text-gray-400">{skipped} file{skipped === 1 ? ' is' : 's are'} uploading, blocked or need a type and will be skipped.</p>}
+            {skipped > 0 && <p className="text-xs text-gray-500 dark:text-gray-400">{tn('{n} file is uploading, blocked or needs a type and will be skipped.', '{n} files are uploading, blocked or need a type and will be skipped.', skipped)}</p>}
           </form>
         </Card>
       </div>

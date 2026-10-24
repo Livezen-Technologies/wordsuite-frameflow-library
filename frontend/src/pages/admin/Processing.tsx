@@ -17,16 +17,17 @@ import { Alert } from '@/components/ui/Alert';
 import { Badge, StatusBadge } from '@/components/ui/Badge';
 import { TableCard, TBody, EmptyRow, th, td, tdFirst, thFirst } from '@/components/ui/Table';
 import { checkProblem, checksPassed } from '@/components/Checks';
-import { typeName } from '@/core/schema';
+import { typeName, label } from '@/core/schema';
+import { msg, t, type MessageKey } from '@/i18n';
 import { classNames, formatBytes, timeAgo } from '@/core/format';
 
-const JOB_TABS: { key: JobStatus | 'all'; name: string }[] = [
-  { key: 'all', name: 'All' },
-  { key: 'queued', name: 'Queued' },
-  { key: 'running', name: 'Running' },
-  { key: 'failed', name: 'Failed' },
-  { key: 'done', name: 'Done' },
-  { key: 'cancelled', name: 'Cancelled' },
+const JOB_TABS: { key: JobStatus | 'all'; name: MessageKey }[] = [
+  { key: 'all', name: msg('All') },
+  { key: 'queued', name: msg('Queued') },
+  { key: 'running', name: msg('Running') },
+  { key: 'failed', name: msg('Failed') },
+  { key: 'done', name: msg('Done') },
+  { key: 'cancelled', name: msg('Cancelled') },
 ];
 
 /** Poll every 3 s while anything is queued or running. */
@@ -50,11 +51,11 @@ function JobsSection() {
     setBusy(j.id);
     try {
       await adminApi.reprocess(j.asset_id, j.version);
-      notify('Reprocessing queued', `${byId.get(j.asset_id)?.title ?? j.asset_id} v${j.version}`);
+      notify(t('Reprocessing queued'), `${byId.get(j.asset_id)?.title ?? j.asset_id} v${j.version}`);
       await qc.invalidateQueries({ queryKey: ['jobs'] });
       void qc.invalidateQueries({ queryKey: ['asset', j.asset_id] });
     } catch (e) {
-      fail('Couldn’t reprocess', errorMessage(e));
+      fail(t('Couldn’t reprocess'), errorMessage(e));
     } finally {
       setBusy(null);
     }
@@ -64,21 +65,21 @@ function JobsSection() {
   return (
     <section aria-labelledby="jobs-h" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="jobs-h" className="text-base font-semibold text-gray-900 dark:text-white">Jobs</h2>
-        <p className="text-xs text-gray-500 dark:text-gray-400" role="status">{live ? 'Refreshing every 3 s while jobs are queued or running' : 'Up to date'}</p>
+        <h2 id="jobs-h" className="text-base font-semibold text-gray-900 dark:text-white">{t('Jobs')}</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400" role="status">{live ? t('Refreshing every 3 s while jobs are queued or running') : t('Up to date')}</p>
       </div>
-      <Tabs label="Job status" current={tab} onChange={setTab} tabs={JOB_TABS.map((t) => ({ ...t, count: counts[t.key] }))} />
+      <Tabs label={t('Job status')} current={tab} onChange={setTab} tabs={JOB_TABS.map((x) => ({ key: x.key, name: t(x.name), count: counts[x.key] }))} />
       {all.isPending ? <Loading /> : all.isError ? <Alert tone="error">{errorMessage(all.error)}</Alert> : (
-        <TableCard caption="Processing jobs">
+        <TableCard caption={t('Processing jobs')}>
           <thead>
             <tr>
-              <th scope="col" className={thFirst}>Asset</th>
-              <th scope="col" className={th}>Status</th>
-              <th scope="col" className={classNames(th, 'hidden md:table-cell')}>Attempts</th>
-              <th scope="col" className={classNames(th, 'hidden lg:table-cell')}>Worker</th>
-              <th scope="col" className={classNames(th, 'hidden md:table-cell')}>Previews / error</th>
-              <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>Updated</th>
-              <th scope="col" className={th}><span className="sr-only">Actions</span></th>
+              <th scope="col" className={thFirst}>{t('Asset')}</th>
+              <th scope="col" className={th}>{t('Status')}</th>
+              <th scope="col" className={classNames(th, 'hidden md:table-cell')}>{t('Attempts')}</th>
+              <th scope="col" className={classNames(th, 'hidden lg:table-cell')}>{t('Worker')}</th>
+              <th scope="col" className={classNames(th, 'hidden md:table-cell')}>{t('Previews / error')}</th>
+              <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>{t('Updated')}</th>
+              <th scope="col" className={th}><span className="sr-only">{t('Actions')}</span></th>
             </tr>
           </thead>
           <TBody>
@@ -100,14 +101,14 @@ function JobsSection() {
                   <td className={classNames(td, 'text-right')}>
                     {['failed', 'done', 'cancelled'].includes(j.status) && canEdit(j.asset_id) && (
                       <Button size="sm" variant={j.status === 'failed' ? 'soft' : 'link'} loading={busy === j.id} onClick={() => void reprocess(j)}>
-                        {j.status === 'failed' ? 'Retry' : 'Reprocess'}<span className="sr-only"> {a?.title ?? j.asset_id} v{j.version}</span>
+                        {j.status === 'failed' ? t('Retry') : t('Reprocess')}<span className="sr-only"> {a?.title ?? j.asset_id} v{j.version}</span>
                       </Button>
                     )}
                   </td>
                 </tr>
               );
             })}
-            {!jobs.length && <EmptyRow colSpan={7}>{tab === 'all' ? 'No jobs yet. Uploading a version queues one; a worker (apps/workers) runs it.' : `No ${tab} jobs.`}</EmptyRow>}
+            {!jobs.length && <EmptyRow colSpan={7}>{tab === 'all' ? t('No jobs yet. Uploading a version queues one; a worker (apps/workers) runs it.') : t('No {status} jobs.', { status: label(tab) })}</EmptyRow>}
           </TBody>
         </TableCard>
       )}
@@ -134,23 +135,23 @@ export function Processing() {
 
   return (
     <div className="space-y-8">
-      <PageHeading title="Processing" meta="Worker jobs: previews, deep checks and metadata for each uploaded version" />
+      <PageHeading title={t('Processing')} meta={t('Worker jobs: previews, deep checks and metadata for each uploaded version')} />
       <JobsSection />
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Upload checks in this tab</h2>
-          {session.length > 0 && <Button size="sm" variant="secondary" onClick={() => uploadSession.clear()}>Clear</Button>}
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">{t('Upload checks in this tab')}</h2>
+          {session.length > 0 && <Button size="sm" variant="secondary" onClick={() => uploadSession.clear()}>{t('Clear')}</Button>}
         </div>
-        <TableCard caption="Uploads checked in this session">
+        <TableCard caption={t('Uploads checked in this session')}>
           <thead>
             <tr>
-              <th scope="col" className={thFirst}>File</th>
-              <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>Type</th>
-              <th scope="col" className={th}>Result</th>
-              <th scope="col" className={classNames(th, 'hidden md:table-cell')}>Checks</th>
-              <th scope="col" className={classNames(th, 'hidden lg:table-cell')}>When</th>
-              <th scope="col" className={th}><span className="sr-only">Actions</span></th>
+              <th scope="col" className={thFirst}>{t('File')}</th>
+              <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>{t('Type')}</th>
+              <th scope="col" className={th}>{t('Result')}</th>
+              <th scope="col" className={classNames(th, 'hidden md:table-cell')}>{t('Checks')}</th>
+              <th scope="col" className={classNames(th, 'hidden lg:table-cell')}>{t('When')}</th>
+              <th scope="col" className={th}><span className="sr-only">{t('Actions')}</span></th>
             </tr>
           </thead>
           <TBody>
@@ -161,29 +162,29 @@ export function Processing() {
                   <td className={tdFirst}><span className="block max-w-56 truncate">{s.name}</span><span className="text-xs font-normal text-gray-500">{formatBytes(s.size)}</span></td>
                   <td className={classNames(td, 'hidden sm:table-cell')}>{s.upload?.type ? typeName(s.upload.type) : '—'}</td>
                   <td className={classNames(td, 'whitespace-normal')}>
-                    {s.error ? <Badge tone="red">{s.error}</Badge> : s.upload && checksPassed(s.upload.checks) ? <Badge tone="green">valid</Badge> : <Badge tone="red">blocked · {failedChecks[0] ? checkProblem(failedChecks[0]) : '—'}</Badge>}
+                    {s.error ? <Badge tone="red">{s.error}</Badge> : s.upload && checksPassed(s.upload.checks) ? <Badge tone="green">{t('valid')}</Badge> : <Badge tone="red">{t('blocked · {problem}', { problem: failedChecks[0] ? checkProblem(failedChecks[0]) : '—' })}</Badge>}
                   </td>
-                  <td className={classNames(td, 'hidden md:table-cell')}>{s.upload ? `${s.upload.checks.filter((c) => c.passed).length}/${s.upload.checks.length} passed` : '—'}</td>
+                  <td className={classNames(td, 'hidden md:table-cell')}>{s.upload ? t('{n}/{total} passed', { n: s.upload.checks.filter((c) => c.passed).length, total: s.upload.checks.length }) : '—'}</td>
                   <td className={classNames(td, 'hidden lg:table-cell')}>{timeAgo(s.at)}</td>
-                  <td className={classNames(td, 'text-right')}>{s.upload && <Button size="sm" variant="link" onClick={() => void recheck(s.key, s.upload!.id)}>Refresh<span className="sr-only"> {s.name}</span></Button>}</td>
+                  <td className={classNames(td, 'text-right')}>{s.upload && <Button size="sm" variant="link" onClick={() => void recheck(s.key, s.upload!.id)}>{t('Refresh')}<span className="sr-only"> {s.name}</span></Button>}</td>
                 </tr>
               );
             })}
-            {!session.length && <EmptyRow colSpan={6}>No uploads yet in this tab. <Link className="font-semibold text-indigo-600" to="/admin/upload">Open the Upload Center</Link></EmptyRow>}
+            {!session.length && <EmptyRow colSpan={6}>{t('No uploads yet in this tab.')} <Link className="font-semibold text-indigo-600" to="/admin/upload">{t('Open the Upload Center')}</Link></EmptyRow>}
           </TBody>
         </TableCard>
       </section>
 
       <section>
-        <h2 className="mb-3 text-base font-semibold text-gray-900 dark:text-white">Assets processing or failed</h2>
+        <h2 className="mb-3 text-base font-semibold text-gray-900 dark:text-white">{t('Assets processing or failed')}</h2>
         {processing.isPending || failed.isPending ? <Loading /> : processing.isError || failed.isError ? <Alert tone="error">{errorMessage(processing.error ?? failed.error)}</Alert> : (
-          <TableCard caption="Assets processing or failed">
+          <TableCard caption={t('Assets processing or failed')}>
             <thead>
               <tr>
-                <th scope="col" className={thFirst}>Asset</th>
-                <th scope="col" className={th}>Status</th>
-                <th scope="col" className={classNames(th, 'hidden md:table-cell')}>Problem</th>
-                <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>Updated</th>
+                <th scope="col" className={thFirst}>{t('Asset')}</th>
+                <th scope="col" className={th}>{t('Status')}</th>
+                <th scope="col" className={classNames(th, 'hidden md:table-cell')}>{t('Problem')}</th>
+                <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>{t('Updated')}</th>
               </tr>
             </thead>
             <TBody>
@@ -199,7 +200,7 @@ export function Processing() {
                   </tr>
                 );
               })}
-              {!assets.length && <EmptyRow colSpan={4}>Nothing processing or failed.</EmptyRow>}
+              {!assets.length && <EmptyRow colSpan={4}>{t('Nothing processing or failed.')}</EmptyRow>}
             </TBody>
           </TableCard>
         )}

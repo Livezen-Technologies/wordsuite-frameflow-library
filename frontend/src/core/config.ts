@@ -13,8 +13,10 @@ export const config = {
   feedBase: (str('VITE_FEED_BASE') || `${apiOrigin}/feed`).replace(/\/+$/, ''),
   /** Router basename, e.g. `/admin` when served under a sub-path. */
   basePath: (str('VITE_BASE_PATH') || '/').replace(/\/+$/, '') || '/',
-  /** OneAuth issuer; when set the sign-in screen offers the OIDC redirect (not wired yet). */
-  oidcIssuer: str('VITE_OIDC_ISSUER'),
+  /** OneAuth / OIDC issuer. When set, sign-in is the Authorization Code + PKCE redirect; token entry is dev-only. */
+  oidcIssuer: str('VITE_OIDC_ISSUER').replace(/\/+$/, ''),
+  /** Public OIDC client id registered for this site (redirect URI `<origin><base>/auth/callback`). */
+  oidcClientId: str('VITE_OIDC_CLIENT_ID'),
   appName: 'FrameFlow Download Center',
   /** Where "Get FrameFlow" points (the WorkSuite Update Center app page by default). */
   frameflowDownloadUrl: str('VITE_FRAMEFLOW_DOWNLOAD_URL') || 'https://updates.worksuitecloud.com/apps/frameflow',

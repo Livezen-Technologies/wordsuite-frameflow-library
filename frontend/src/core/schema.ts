@@ -1,3 +1,5 @@
+import { tx } from '@/i18n';
+
 /**
  * The bits of packages/asset-schema the admin UI needs, ported to TypeScript.
  * Keep in sync with packages/asset-schema/index.js (the API enforces the real rules).
@@ -57,7 +59,16 @@ export function can(role: string | null | undefined, permission: Permission): bo
   return ((ROLES as Record<string, readonly string[]>)[role] ?? []).includes(permission);
 }
 
-export const typeName = (t: string): string => (ASSET_TYPES as Record<string, { short: string }>)[t]?.short ?? t;
+/** Short type name in the current language ("LUTs"). */
+export const typeName = (t: string): string => tx((ASSET_TYPES as Record<string, { short: string }>)[t]?.short ?? t);
+/** Full type name in the current language ("LUTs & Color Presets"). */
+export const typeLongName = (t: string): string => tx((ASSET_TYPES as Record<string, { name: string }>)[t]?.name ?? t);
+/** Where the type installs in FrameFlow, translated. */
+export const typeTarget = (t: string): string => tx((ASSET_TYPES as Record<string, { target: string }>)[t]?.target ?? t);
+/** Enum value (status, visibility, tier, licence terms) as a translated label. */
+export const label = (s: string | null | undefined): string => tx(String(s ?? '').replace(/_/g, ' '));
+export const tierLabel = (tier: string): string => tx(tier);
+export const roleLabel = (r: string | null | undefined): string => tx((ROLE_LABELS as Record<string, string>)[r ?? ''] ?? r ?? '');
 export const typeColor = (t: string): string => (ASSET_TYPES as Record<string, { color: string }>)[t]?.color ?? '#6366f1';
 export const humanize = (s: string | null | undefined): string => String(s ?? '').replace(/_/g, ' ');
 

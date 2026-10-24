@@ -4,6 +4,8 @@ namespace App\Controllers\Admin;
 
 use App\Controllers\BaseApiController;
 use App\Exceptions\HttpError;
+use App\Libraries\Http\ApiResponse;
+use App\Libraries\Http\BlobResponse;
 
 /** Admin asset endpoints, blueprint §7.3. Permissions are checked per asset in LibraryService. */
 class AssetsController extends BaseApiController
@@ -105,6 +107,17 @@ class AssetsController extends BaseApiController
     protected function archive(string $id)
     {
         return $this->lib->unpublish($this->actor(), $id, ['op' => 'archive']);
+    }
+
+    /** A version's generated preview for signed-in admins (drafts too), with Range and ETag. */
+    protected function preview(string $id, string $version, string $file)
+    {
+        $blob = $this->lib->previewFile($id, $version, $file, true);
+        if ($blob === null) {
+            return ApiResponse::error(404, 'NOT_FOUND', 'Preview not found.');
+        }
+
+        return BlobResponse::serve(service('blobs'), $blob, $this->request->getMethod(), $this->request->getHeaderLine('Range'), $this->request->getHeaderLine('If-None-Match'), ['Cache-Control' => 'private, no-store']);
     }
 
     protected function reprocess(string $id)

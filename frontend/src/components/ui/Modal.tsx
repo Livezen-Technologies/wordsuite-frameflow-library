@@ -4,6 +4,7 @@ import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from '@headlessui/re
 import { ExclamationTriangleIcon, QuestionMarkCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { Button } from './Button';
 import { classNames } from '@/core/format';
+import { t } from '@/i18n';
 
 interface ModalProps {
   open: boolean;
@@ -55,10 +56,10 @@ export function Modal({ open, onClose, title, description, children, confirmLabe
                     tone === 'danger' ? 'bg-red-600 hover:bg-red-500 dark:bg-red-500 dark:hover:bg-red-400' : 'bg-indigo-600 hover:bg-indigo-500 dark:bg-indigo-500 dark:hover:bg-indigo-400',
                   )}
                 >
-                  {busy ? 'Working…' : confirmLabel}
+                  {busy ? t('Working…') : confirmLabel}
                 </button>
                 <button type="button" data-autofocus={children ? undefined : true} onClick={onClose} className="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto dark:bg-white/10 dark:text-white dark:shadow-none dark:inset-ring-white/5 dark:hover:bg-white/20">
-                  Cancel
+                  {t('Cancel')}
                 </button>
               </div>
             </form>
@@ -88,7 +89,7 @@ export function Drawer({ open, onClose, title, description, children, footer }: 
                       <div className="ml-3 flex h-7 items-center">
                         <button type="button" onClick={onClose} className="relative rounded-md text-gray-400 hover:text-gray-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 dark:hover:text-white">
                           <span className="absolute -inset-2.5" />
-                          <span className="sr-only">Close panel</span>
+                          <span className="sr-only">{t('Close panel')}</span>
                           <XMarkIcon aria-hidden="true" className="size-6" />
                         </button>
                       </div>
@@ -109,7 +110,7 @@ export function Drawer({ open, onClose, title, description, children, footer }: 
 export function SecondaryCancel({ onClick }: { onClick: () => void }) {
   return (
     <Button variant="secondary" onClick={onClick}>
-      Cancel
+      {t('Cancel')}
     </Button>
   );
 }

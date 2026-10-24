@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { BrowsePage } from '@/pages/public/BrowsePage';
+import { Browse as BrowsePage } from '@/pages/site/Library';
 import { mockFetch, renderAt, Route } from './utils';
 import { setToken } from '@/services/auth';
 import type { PublicAsset } from '@/types/api';
@@ -15,44 +15,51 @@ const asset = (i: number, p: Partial<PublicAsset> = {}): PublicAsset => ({
 });
 
 describe('Browse library data flow', () => {
-  it('maps filters to GET /assets, pages with the cursor, and links cards to detail', async () => {
+  it('maps search, type, plan and sort to GET /assets, pages with the cursor, and links cards to detail', async () => {
     setToken(null);
     const user = userEvent.setup();
     const { calls } = mockFetch({
+      'GET /api/v1/catalog/types': () => ({ data: [{ key: 'lut', name: 'LUTs', pack_type: 'luts', editor_target: '', count: 25 }] }),
       'GET /api/v1/assets': (c) => {
         const u = new URL(c.url, 'http://x');
-        if (u.searchParams.get('cursor') === '24') return { data: [asset(25)], next_cursor: null, total: 25 };
-        if (u.searchParams.get('type') === 'lut') return { data: [asset(1), asset(2)], next_cursor: '24', total: 25 };
+        if (u.searchParams.get('cursor') === '16') return { data: [asset(25)], next_cursor: null, total: 25 };
+        if (u.searchParams.get('type') === 'lut') return { data: [asset(1), asset(2)], next_cursor: '16', total: 25 };
         return { data: [asset(1)], next_cursor: null, total: 1 };
       },
-      'GET /api/v1/catalog/categories': () => ({ data: [{ id: 'c1', type: 'lut', name: 'Cinematic', slug: 'cinematic', parent_id: null, sort: 0, icon: null, visible: true }] }),
-      'GET /api/v1/search/suggest': () => ({ data: [{ id: 'as_9', title: 'Teal Orange', type: 'lut' }] }),
     });
     renderAt('/library', <Route path="/library" element={<BrowsePage />} />, { signedIn: false });
 
-    expect(await screen.findByText('1 asset')).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('Type'), 'lut');
-    expect(await screen.findByText('25 assets')).toBeInTheDocument();
-    const list = screen.getAllByRole('list').find((l) => within(l).queryByText('Asset 2'))!;
-    expect(within(list).getAllByRole('link')).toHaveLength(2);
-    expect(within(list).getByRole('link', { name: /Asset 1/ })).toHaveAttribute('href', '/library/asset-1');
+    expect(await screen.findByText('1 result')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Browse 25 assets' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'LUTs & colour presets' }));
+    expect(await screen.findByText('25 results')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Asset 1/ })).toHaveAttribute('href', '/library/asset-1');
 
-    await user.selectOptions(screen.getByLabelText('Category'), 'cinematic');
-    await user.selectOptions(screen.getByLabelText('Plan'), 'pro');
+    await user.click(screen.getAllByRole('checkbox', { name: 'pro' })[0]);
     await user.selectOptions(screen.getByLabelText('Sort'), 'new');
     await waitFor(() => {
       const last = new URL(calls.filter((c) => c.path === '/api/v1/assets').at(-1)!.url, 'http://x');
-      expect(Object.fromEntries(last.searchParams)).toMatchObject({ type: 'lut', category: 'cinematic', tier: 'pro', sort: 'new', limit: '24' });
+      expect(Object.fromEntries(last.searchParams)).toMatchObject({ type: 'lut', tier: 'pro', sort: 'new', limit: '16' });
     });
-
-    await user.click(await screen.findByRole('button', { name: 'Load more' }));
+    await user.click(await screen.findByRole('button', { name: 'Next →' }));
     expect(await screen.findByText('Asset 25')).toBeInTheDocument();
-    expect(calls.some((c) => c.url.includes('cursor=24'))).toBe(true);
+    expect(calls.some((c) => c.url.includes('cursor=16'))).toBe(true);
+    expect(screen.getByRole('button', { name: '2' })).toHaveAttribute('aria-current', 'page');
     expect(calls.every((c) => !c.headers.Authorization)).toBe(true);
 
-    await user.type(screen.getByLabelText('Search the library'), 'te');
-    expect(await screen.findByRole('option', { name: /Teal Orange/ })).toBeInTheDocument();
-    expect(calls.some((c) => c.path === '/api/v1/search/suggest' && c.url.includes('q=te'))).toBe(true);
+    await user.type(screen.getByLabelText('Search the library'), 'glitch{enter}');
+    await waitFor(() => expect(calls.some((c) => c.url.includes('q=glitch'))).toBe(true));
+  });
+
+  it('applies aspect and feature filters to the loaded page and says so', async () => {
+    setToken(null);
+    const user = userEvent.setup();
+    mockFetch({ 'GET /api/v1/assets': () => ({ data: [asset(1, { aspect_ratios: ['9:16'] }), asset(2, { aspect_ratios: ['16:9'], meta: { loop: true } })], next_cursor: null, total: 2 }) });
+    renderAt('/library', <Route path="/library" element={<BrowsePage />} />, { signedIn: false });
+    await screen.findByText('Asset 1');
+    await user.click(screen.getAllByRole('checkbox', { name: '9:16 Reels' })[0]);
+    expect(await screen.findByText('1 of 2 results on this page match the extra filters')).toBeInTheDocument();
+    expect(screen.queryByText('Asset 2')).not.toBeInTheDocument();
   });
 });
 

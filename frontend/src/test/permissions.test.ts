@@ -21,7 +21,7 @@ describe('permissions (ported from packages/asset-schema)', () => {
 
   it('hides nav items the role lacks, like the old admin', () => {
     const visible = (role: string) => ADMIN_NAV.filter((i) => !i.perm || can(role, i.perm)).map((i) => i.name);
-    expect(visible('analyst')).toEqual(['Dashboard', 'Asset Library', 'Categories & Tags', 'Audit log']);
+    expect(visible('analyst')).toEqual(['Dashboard', 'Asset Library', 'Categories & Tags', 'Analytics', 'Audit log']);
     expect(visible('content_editor')).toEqual(['Dashboard', 'Asset Library', 'Upload Center', 'Processing', 'Categories & Tags']);
     expect(visible('reviewer')).toContain('Review Queue');
   });

@@ -2,38 +2,48 @@
 
 Admins upload, validate, version and publish creative assets; FrameFlow users
 browse, download and use them in the editor without restarting.
-Full spec: [`docs/blueprint.md`](docs/blueprint.md).
+Full spec: [`docs/blueprint.md`](docs/blueprint.md); API additions:
+[`docs/api-v1-additions.md`](docs/api-v1-additions.md).
 
 ```
-apps/api/              Library API, FrameFlow feed, serves the admin web (Node 22, no dependencies)
-apps/admin-web/        Download Center admin (A1–A8 screens), plain ES modules + Tailwind
-packages/asset-schema/ 12 asset types, metadata + validation rules, FrameFlow pack mapping
-packages/sdk-js/       Typed client for the client API (§7.2)
+backend/               Library API, FrameFlow feed, previews (CodeIgniter 4.7, PHP 8.3) — see backend/README.md
+frontend/              Download Center admin (/admin) and public site (React + Tailwind v4)
+apps/workers/          Processing workers: previews and deep checks (Node 22, FFmpeg, Chromium)
+packages/sdk-js/       Typed client for the client API (§7.2), incl. devices, my library and live sync
+packages/asset-schema/ The 12 asset types and validators in JS (reference; the backend has its own port)
 desktop-module/        Where the desktop side lives in worksuite-frameflow
-tests/                 node:test suite, including an end-to-end install through FrameFlow's asset store
-docs/                  Blueprint
+deploy/cloudflare/     The production Worker (assets + API container + worker container)
+tests/                 node:test acceptance suite run against the backend, incl. an end-to-end install through FrameFlow's asset store
+docs/                  Blueprint and API contract
 ```
 
 ## Run it
 
 ```bash
-npm start                                   # http://localhost:8787
-# admin:  http://localhost:8787/admin/      token: dev-admin (super admin)
-# feed:   http://localhost:8787/feed/stable/catalog.json
-npm test
+cd backend && composer install && php spark migrate --all && php spark serve   # http://localhost:8080
+# token: dev-admin (super admin, outside production)
+# feed:  http://localhost:8080/feed/stable/catalog.json
+npm --prefix frontend ci && npm --prefix frontend run dev                       # the admin + public site
 ```
 
-Environment:
+Configuration (database, signing key, R2/S3, sign-in, Meilisearch, webhooks)
+is in [`backend/README.md`](backend/README.md#environment).
 
-| Variable | Meaning |
-|---|---|
-| `PORT` | default 8787 |
-| `LIBRARY_DATA_DIR` | state + files, default `./data` |
-| `LIBRARY_ADMIN_TOKENS` | `token:role:userId,…` with roles `super_admin`, `library_manager`, `content_editor`, `reviewer`, `analyst`. Default (dev only): `dev-admin:super_admin:admin` |
-| `LIBRARY_SIGNING_KEY` | PEM Ed25519 private key that signs the catalog. Production: the same key as FrameFlow's `ASSET_SIGNING_KEY`, so the app's built-in public key verifies it. Unset: a dev key is created in the data dir |
-| `LIBRARY_OIDC_ISSUER` | Worksuite Cloud / OneAuth issuer. Enables sign-in: access tokens are verified against its keys; plan from the token, Download Center roles from `library_roles` (`LIBRARY_OIDC_AUDIENCE`, default `frameflow-library`; `LIBRARY_OIDC_ROLE_CLAIM`) |
-| `DATABASE_URL` | PostgreSQL for the library state (one row per record, single writer via an advisory lock). Unset: `library.json` in the data dir |
-| `LIBRARY_S3_ENDPOINT`, `LIBRARY_S3_BUCKET`, `LIBRARY_S3_ACCESS_KEY_ID`, `LIBRARY_S3_SECRET_ACCESS_KEY` | R2 or S3 for originals and packages (`LIBRARY_S3_REGION`, default `auto`; `LIBRARY_S3_PREFIX`). Unset: files in the data dir |
+## Tests
+
+```bash
+npm ci
+npm run test:backend                         # PHPUnit (backend/tests)
+npm test                                     # acceptance suite: a fresh backend per test on SQLite
+LIBRARY_PHP_DATABASE_URL=postgres://postgres@127.0.0.1:5432/library_ci npm test   # …on PostgreSQL (an empty database it may reset)
+LIBRARY_API_URL=https://staging.example.com npm test                            # against a running server (tests that need their own server settings skip)
+```
+
+`tests/harness.js` starts `php spark serve` on a free port with a new database
+and blob folder for each test. The worker tests need `ffmpeg`, `fc-scan` and
+Chromium (`npm ci --prefix apps/workers && npx --prefix apps/workers playwright install chromium`)
+and skip without them; the FrameFlow install test needs a `worksuite-frameflow`
+checkout next to this repository (or `FRAMEFLOW_DIR`).
 
 ## Processing workers
 
@@ -53,26 +63,48 @@ that has the `worker` role (`LIBRARY_ADMIN_TOKENS="…,wtok:worker:worker-1"`).
 | text / video template, brand kit | title, storyboard or swatch card | — |
 
 All types: ClamAV scan when `CLAMAV_HOST` is set. Generated thumbnails
-satisfy the publish gate. With `LIBRARY_REQUIRE_PROCESSING=1` a version can't be
-published until its job is done; a failed check blocks it.
+satisfy the publish gate. With `require_processing` on (admin settings, or
+`LIBRARY_REQUIRE_PROCESSING=1`) a version can't be published until its job is
+done; a failed check blocks it.
 
 ```bash
 npm ci --prefix apps/workers
-LIBRARY_API_URL=http://localhost:8787 LIBRARY_WORKER_TOKEN=wtok node apps/workers/src/worker.js
+LIBRARY_API_URL=http://localhost:8080 LIBRARY_WORKER_TOKEN=wtok node apps/workers/src/worker.js
 docker build -f apps/workers/Dockerfile -t frameflow-library-worker .   # FFmpeg + Chromium image
 ```
 
-Needs `ffmpeg`, `ffprobe`, `fc-scan` and Chromium (Playwright). Jobs are leased
-for 10 minutes and retried up to 3 times; the admin API lists them
-(`GET /api/v1/admin/jobs`) and re-queues (`POST /api/v1/admin/assets/:id/reprocess`).
+Jobs are leased for 10 minutes and retried up to 3 times; the admin API lists
+them (`GET /api/v1/admin/jobs`) and re-queues (`POST /api/v1/admin/assets/:id/reprocess`).
 
 ## Hosting
 
-`frameflow.worksuitecloud.com/library` runs on Cloudflare: a Worker in front
-of one Container built from the `Dockerfile` (`deploy/cloudflare/`), with
-PostgreSQL for state and R2 for files. Add the secrets listed at the top of
-`.github/workflows/deploy.yml`, then run **Actions → Deploy**. One container
-instance on purpose: it holds the database's writer lock.
+`frameflow.worksuitecloud.com/library` is one Cloudflare Worker (the FrameFlow web editor serves the rest of the host; the Worker takes `/library` off before routing)
+([`deploy/cloudflare/`](deploy/cloudflare)):
+
+| Path | Served by |
+|---|---|
+| `/api/*`, `/feed/*`, `/previews/*`, `/healthz` | the Library API container, built from `backend/Dockerfile` (nginx + php-fpm; runs migrations, the scheduler and the webhook queue) |
+| everything else | `frontend/dist` as Workers static assets; unknown paths get `index.html` (`not_found_handling: "single-page-application"`, the frontend is built with `VITE_BASE_PATH=/library` and `VITE_API_BASE=/library`) |
+
+State is in PostgreSQL (CodeIgniter's `database.default.*` settings), files in R2.
+
+**Processing worker hosting: a Cloudflare cron trigger.** The same Worker
+declares a second container class (`ProcessorContainer`, built from
+`apps/workers/Dockerfile`, max one instance). A cron trigger
+(`*/5 * * * *`) calls it every five minutes: it starts the container if it
+isn't running and pushes its 15-minute sleep timer out, so exactly one
+processing worker is always up and polling the API for jobs with
+`LIBRARY_WORKER_TOKEN`. The same cron pings the API container's `/healthz`,
+so its scheduler (`publish_at` / `unpublish_at`) and webhook queue keep
+running when there is no traffic. Without `LIBRARY_WORKER_TOKEN` no worker is
+started. (Any always-on host works too: run the worker image anywhere with
+`LIBRARY_API_URL` and `LIBRARY_WORKER_TOKEN`, and leave the secret unset here.)
+
+Add the secrets listed at the top of
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), then run
+**Actions → Deploy**: it runs the tests, builds the frontend, deploys the
+Worker, its assets and both containers, sets the runtime secrets and
+smoke-tests the API, the feed and the SPA fallback.
 
 ## Wiring with FrameFlow
 
@@ -83,8 +115,8 @@ and registers them with the editor's panels. This server publishes exactly
 that feed, so pointing the app at it is all that's needed:
 
 ```bash
-WSC_ASSET_URL=http://localhost:8787/feed \
-WSC_ASSET_PUBLIC_KEY="$(curl -s http://localhost:8787/feed/public-key.pem)" \
+WSC_ASSET_URL=http://localhost:8080/feed \
+WSC_ASSET_PUBLIC_KEY="$(curl -s http://localhost:8080/feed/public-key.pem)" \
   npm --prefix ../worksuite-frameflow/electron start
 ```
 
@@ -134,6 +166,5 @@ sync event.
 
 ## What v1 doesn't do yet
 
-- Device registration and device limits per plan.
 - tus chunked uploads (uploads are single requests up to 2 GB). Workers don't compile shaders (FrameFlow applies transitions and filters as presets) or convert fonts to WOFF2, and transition/filter previews are FFmpeg approximations of FrameFlow's renderers.
-- Favorites, download history and installs mirror (`/me/*` beyond usage), SSE push, Meilisearch. One API instance at a time (the PostgreSQL writer lock); scaling out needs per-request transactions instead of the in-memory state.
+- Rate limits (§7.4), `/admin/jobs/stream`, audience-rule CRUD and a `delete` (legal takedown) sync op.
