@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- A filter may now carry one of FrameFlow's own clip effects (`effect: { type, params }`) instead of a colour grade. Blur, glow, VHS, mirror, wave, RGB split and the rest are filters too, and none of them has a grade to carry; the gate that demanded one kept them out of the library. A filter still has to be one or the other, and `render_engine` records which effect it is.
+
 - The Library is now hosted at https://frameflow.worksuitecloud.com/library (admin at `/library/admin/`, feed at `/library/feed/`), next to the FrameFlow web editor, instead of library.frameflow.worksuitecloud.com.
 
 ### Added

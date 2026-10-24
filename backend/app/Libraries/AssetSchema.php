@@ -50,6 +50,9 @@ final class AssetSchema
         'archived'         => ['draft'],
     ];
 
+    /** Clip effects FrameFlow ships (worksuite-frameflow apps/web/src/effects/definitions). */
+    public const FILTER_EFFECTS = ['blur', 'color-grade', 'curves', 'lut', 'sharpen', 'vignette', 'posterize', 'invert', 'edge-detect', 'pixelate', 'mirror', 'wave', 'glow', 'film-grain', 'vhs', 'rgb-split', 'sepia'];
+
     /** Transition renderers FrameFlow ships (worksuite-frameflow apps/web/src/transitions/types.ts). */
     public const TRANSITION_ENGINES = ['cross-dissolve', 'dip-to-black', 'blur-dissolve', 'slide', 'push', 'wipe', 'split', 'circle', 'iris-diamond', 'zoom-in', 'zoom-out', 'spin', 'whip-pan'];
 
@@ -858,9 +861,18 @@ final class AssetSchema
                 $meta['render_engine']       = $v->type;
                 $meta['default_duration_ms'] = self::jsNum(floor((float) (self::prop($v, 'duration') ?? 0.8) * 1000 + 0.5));
             } else {
-                $grade = self::prop($j, 'grade');
-                if (! $grade instanceof \stdClass || get_object_vars($grade) === []) {
-                    $bad('filter.grade', 'Filters need a grade object (colour-grade params).');
+                /* A filter is either a colour grade or one of FrameFlow's own
+                   clip effects — blur, glow, VHS and the rest are filters too,
+                   and they have no grade to carry. */
+                $grade  = self::prop($j, 'grade');
+                $effect = self::prop($j, 'effect');
+                $hasGrade  = $grade instanceof \stdClass && get_object_vars($grade) !== [];
+                $hasEffect = $effect instanceof \stdClass && in_array(self::prop($effect, 'type'), self::FILTER_EFFECTS, true);
+                if (! $hasGrade && ! $hasEffect) {
+                    $bad('filter.grade', 'Filters need a grade object (colour-grade params) or an effect whose type is one of FrameFlow\'s: ' . implode(', ', self::FILTER_EFFECTS) . '.');
+                }
+                if ($hasEffect) {
+                    $meta['render_engine'] = $effect->type;
                 }
             }
             $pass('preset.schema');

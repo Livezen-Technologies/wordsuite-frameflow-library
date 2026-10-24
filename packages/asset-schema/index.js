@@ -466,13 +466,24 @@ export function validateFile({ type, filename, buf }) {
 			if (!TRANSITION_ENGINES.includes(v?.type)) bad("transition.type", `Transition type must be one of FrameFlow's: ${TRANSITION_ENGINES.join(", ")}.`);
 			meta.render_engine = v.type;
 			meta.default_duration_ms = Math.round((v.duration ?? 0.8) * 1000);
-		} else if (!j?.grade || typeof j.grade !== "object" || !Object.keys(j.grade).length) bad("filter.grade", "Filters need a grade object (colour-grade params).");
+		} else {
+			/* A filter is either a colour grade or one of FrameFlow's own clip
+			   effects — blur, glow, VHS and the rest are filters too, and they
+			   have no grade to carry. */
+			const hasGrade = j?.grade && typeof j.grade === "object" && Object.keys(j.grade).length > 0;
+			const hasEffect = j?.effect && typeof j.effect === "object" && FILTER_EFFECTS.includes(j.effect.type);
+			if (!hasGrade && !hasEffect) bad("filter.grade", `Filters need a grade object (colour-grade params) or an effect whose type is one of FrameFlow's: ${FILTER_EFFECTS.join(", ")}.`);
+			if (hasEffect) meta.render_engine = j.effect.type;
+		}
 		pass("preset.schema");
 	}
 	return { meta, checks };
 }
 
 /** Transition renderers FrameFlow ships (worksuite-frameflow apps/web/src/transitions/types.ts). */
+/** Clip effects FrameFlow ships (worksuite-frameflow apps/web/src/effects/definitions). */
+export const FILTER_EFFECTS = ["blur", "color-grade", "curves", "lut", "sharpen", "vignette", "posterize", "invert", "edge-detect", "pixelate", "mirror", "wave", "glow", "film-grain", "vhs", "rgb-split", "sepia"];
+
 export const TRANSITION_ENGINES = ["cross-dissolve", "dip-to-black", "blur-dissolve", "slide", "push", "wipe", "split", "circle", "iris-diamond", "zoom-in", "zoom-out", "spin", "whip-pan"];
 
 // ---------- publish gate (§4.3) ----------

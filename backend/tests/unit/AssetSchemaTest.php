@@ -44,6 +44,9 @@ final class AssetSchemaTest extends CIUnitTestCase
         $this->assertSame('transition.type', $this->rule(static fn () => S::validateFile('transition', 'a.ffx', $j(['value' => ['type' => 'melt']]))));
         $this->assertSame('filter.grade', $this->rule(static fn () => S::validateFile('filter', 'a.ffx', $j(['name' => 'x']))));
         $this->assertSame('filter.grade', $this->rule(static fn () => S::validateFile('filter', 'a.ffx', '{"grade":{}}')));
+        $this->assertSame('filter.grade', $this->rule(static fn () => S::validateFile('filter', 'a.ffx', $j(['effect' => ['type' => 'melt']]))));
+        $this->assertSame('vhs', S::validateFile('filter', 'a.ffx', $j(['effect' => ['type' => 'vhs', 'params' => ['amount' => 60]]]))['meta']['render_engine']);
+        $this->assertSame([], S::validateFile('filter', 'a.ffx', $j(['grade' => ['exposure' => 0.2]]))['meta']['render_engine'] ?? []);
         $this->assertSame('text.params', $this->rule(static fn () => S::validateFile('text_template', 'a.json', $j(['placeholders' => []]))));
         $this->assertSame(4000, S::validateFile('video_template', 'a.fftemplate', $j(['aspect' => ['width' => 1920, 'height' => 1080], 'layers' => [['kind' => 'media', 'slot' => 0, 'start' => 0, 'duration' => 4]]]))['meta']['total_duration_ms']);
     }
