@@ -1,0 +1,10 @@
+vendor
+tests
+build
+writable/logs/*
+writable/cache/*
+writable/session/*
+writable/debugbar/*
+writable/library
+writable/*.sqlite
+.env

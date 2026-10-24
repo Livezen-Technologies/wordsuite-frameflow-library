@@ -1,0 +1,34 @@
+# FrameFlow Library API — copy to .env for local development.
+# Real environment variables take precedence over this file.
+
+CI_ENVIRONMENT = development
+
+# Database: PostgreSQL in production, SQLite for development.
+# DATABASE_URL = postgres://library:secret@127.0.0.1:5432/library?sslmode=require
+# DATABASE_URL = sqlite:/absolute/path/library.sqlite   (default: writable/library.sqlite)
+
+# Static tokens "token:role:userId,…" (unset outside production: dev-admin:super_admin:admin)
+# LIBRARY_ADMIN_TOKENS = dev-admin:super_admin:admin,wk:worker:worker-1
+
+# Worksuite Cloud OIDC
+# LIBRARY_OIDC_ISSUER = https://accounts.worksuitecloud.com
+# LIBRARY_OIDC_AUDIENCE = frameflow-library
+# LIBRARY_OIDC_ROLE_CLAIM = library_roles
+
+# Catalog signing key (PEM PKCS#8 Ed25519; `php spark library:keygen`). Unset: a dev key kept in the database.
+# LIBRARY_SIGNING_KEY = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+
+# Blobs: a local folder, or an S3-compatible bucket (R2, S3, MinIO)
+# LIBRARY_DATA_DIR = /var/lib/library
+# LIBRARY_S3_ENDPOINT = https://<account>.r2.cloudflarestorage.com
+# LIBRARY_S3_BUCKET = frameflow-library
+# LIBRARY_S3_ACCESS_KEY_ID =
+# LIBRARY_S3_SECRET_ACCESS_KEY =
+# LIBRARY_S3_REGION = auto
+# LIBRARY_S3_PREFIX =
+
+# Admin web origin(s) allowed by CORS
+# LIBRARY_CORS_ORIGINS = http://localhost:5173
+
+# Hold publishing until a worker processed the version
+# LIBRARY_REQUIRE_PROCESSING = 1

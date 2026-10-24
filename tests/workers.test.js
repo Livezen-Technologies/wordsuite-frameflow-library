@@ -12,6 +12,7 @@ import { createApiClient } from "../apps/workers/src/client.js";
 import { closeBrowser } from "../apps/workers/src/lottie.js";
 import { gradeFilter, xfadeFor } from "../apps/workers/src/processors.js";
 import { processJob } from "../apps/workers/src/worker.js";
+import { startTarget } from "./harness.js";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "fflib-work-"));
 const hasTools = (() => {
@@ -45,9 +46,8 @@ function fixtures(dir) {
 }
 
 async function start({ requireProcessing = false } = {}) {
-	const { server, lib } = await createServer({ dataDir: tmp(), tokens: parseTokens("su:super_admin:u1,wk:worker:w1,wk2:worker:w2,ed:content_editor:u2"), requireProcessing });
-	await new Promise((r) => server.listen(0, r));
-	const base = `http://127.0.0.1:${server.address().port}`;
+	const tokens = "su:super_admin:u1,wk:worker:w1,wk2:worker:w2,ed:content_editor:u2";
+	const { server, lib, base } = await startTarget({ tokens, env: { LIBRARY_REQUIRE_PROCESSING: requireProcessing ? "1" : "" }, node: () => createServer({ dataDir: tmp(), tokens: parseTokens(tokens), requireProcessing }) });
 	const call = async (method, p, { token = "su", body, raw, headers = {} } = {}) => {
 		const res = await fetch(base + p, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...headers }, body: raw ?? (body ? JSON.stringify(body) : undefined) });
 		const text = await res.text();

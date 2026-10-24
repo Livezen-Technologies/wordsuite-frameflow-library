@@ -8,6 +8,7 @@ import zlib from "node:zlib";
 import { parseCube, svgProblems, lottieInfo, detectType, uploadChecks, publishProblems, tagsByScript } from "../packages/asset-schema/index.js";
 import { createServer, parseTokens } from "../apps/api/src/server.js";
 import { createZip, inspectZip, verify } from "../apps/api/src/pack.js";
+import { startTarget, target } from "./harness.js";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "fflib-"));
 
@@ -96,11 +97,10 @@ test("publish gate lists every blocker", () => {
 
 // ---------- API ----------
 
+// LIBRARY_API_URL=php runs these against the CodeIgniter backend (tests/harness.js).
 async function start() {
-	const dataDir = tmp();
-	const { server, lib } = await createServer({ dataDir, tokens: parseTokens("su:super_admin:u1,ed:content_editor:u2,rv:reviewer:u3,mg:library_manager:u4") });
-	await new Promise((r) => server.listen(0, r));
-	const base = `http://127.0.0.1:${server.address().port}`;
+	const tokens = "su:super_admin:u1,ed:content_editor:u2,rv:reviewer:u3,mg:library_manager:u4";
+	const { server, lib, base, dataDir } = await startTarget({ tokens, node: async () => ({ ...(await createServer({ dataDir: tmp(), tokens: parseTokens(tokens) })), dataDir: null }) });
 	const call = async (method, p, { token, body, raw, headers = {} } = {}) => {
 		const res = await fetch(base + p, {
 			method,
@@ -282,17 +282,27 @@ test("OIDC: verified tokens carry plan and admin role; Pro packs need the plan",
 	const crypto = await import("node:crypto");
 	const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
 	const jwk = { ...publicKey.export({ format: "jwk" }), kid: "k1", alg: "RS256", use: "sig" };
-	const issuer = "https://accounts.test";
+	let issuer = "https://accounts.test";
 	const fakeFetch = async (u) => new Response(JSON.stringify(String(u).endsWith("openid-configuration") ? { jwks_uri: `${issuer}/jwks` } : { keys: [jwk] }));
+	// Against an external backend the issuer must be reachable over HTTP, so serve the discovery document and JWKS.
+	let issuerServer = null;
+	if (target !== "node") {
+		const http = await import("node:http");
+		issuerServer = http.createServer((req, res) => {
+			res.setHeader("Content-Type", "application/json");
+			res.end(JSON.stringify(req.url.endsWith("openid-configuration") ? { issuer, jwks_uri: `${issuer}/jwks` } : { keys: [jwk] }));
+		});
+		await new Promise((r) => issuerServer.listen(0, "127.0.0.1", r));
+		issuer = `http://127.0.0.1:${issuerServer.address().port}`;
+		t.after(() => issuerServer.close());
+	}
 	const jwt = (claims, key = privateKey) => {
 		const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 		const head = `${enc({ alg: "RS256", kid: "k1", typ: "JWT" })}.${enc({ iss: issuer, aud: "frameflow-library", exp: Math.floor(Date.now() / 1000) + 600, ...claims })}`;
 		return `${head}.${crypto.sign("sha256", Buffer.from(head), key).toString("base64url")}`;
 	};
-	const { server } = await createServer({ dataDir: tmp(), tokens: new Map(), oidc: { issuer }, fetch: fakeFetch });
-	await new Promise((r) => server.listen(0, r));
+	const { server, base } = await startTarget({ tokens: "", env: { LIBRARY_OIDC_ISSUER: issuer }, node: () => createServer({ dataDir: tmp(), tokens: new Map(), oidc: { issuer }, fetch: fakeFetch }) });
 	t.after(() => server.close());
-	const base = `http://127.0.0.1:${server.address().port}`;
 	const as = (token, p, init = {}) => fetch(base + p, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) } });
 
 	const admin = jwt({ sub: "u-admin", library_roles: ["super_admin"], plan: "enterprise" });

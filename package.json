@@ -10,7 +10,8 @@
 	"scripts": {
 		"start": "node apps/api/src/server.js",
 		"dev": "node --watch apps/api/src/server.js",
-		"test": "node --test --test-concurrency=1 tests/*.test.js"
+		"test": "node --test --test-concurrency=1 tests/*.test.js",
+		"test:php": "LIBRARY_API_URL=php node --test --test-concurrency=1 tests/*.test.js"
 	},
 	"dependencies": {
 		"pg": "^8.23.1"

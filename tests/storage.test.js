@@ -10,6 +10,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { createServer, parseTokens } from "../apps/api/src/server.js";
 import { createFileBlobs, createPostgresState, createS3Blobs } from "../apps/api/src/storage.js";
+import { startPhp, target } from "./harness.js";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "fflib-store-"));
 const PG = process.env.LIBRARY_TEST_DATABASE_URL;
@@ -154,4 +155,30 @@ test("SigV4 signatures match the AWS SDK signer (what R2 and S3 verify)", async 
 		const sig = (h) => /Signature=([0-9a-f]+)/.exec(h)[1];
 		assert.equal(sig(ours.headers.authorization), sig(signed.headers.authorization), `${method} ${key}`);
 	}
+});
+
+// ---------- the PHP backend (LIBRARY_API_URL=php) on S3/R2 ----------
+
+test("PHP backend: packages go to the S3/R2 bucket and are served with ranges", { skip: target !== "php" && "set LIBRARY_API_URL=php" }, async (t) => {
+	const { s3, creds } = await startS3();
+	t.after(() => s3.close());
+	const s = await startPhp({ tokens: "su:super_admin:u1", env: { LIBRARY_S3_ENDPOINT: creds.endpoint, LIBRARY_S3_BUCKET: creds.bucket, LIBRARY_S3_ACCESS_KEY_ID: creds.accessKeyId, LIBRARY_S3_SECRET_ACCESS_KEY: creds.secretAccessKey, LIBRARY_S3_REGION: creds.region } });
+	t.after(() => s.server.close());
+	const as = (p, init = {}) => fetch(s.base + p, { ...init, headers: { Authorization: "Bearer su", ...(init.headers ?? {}) } });
+	const rows = [];
+	for (let b = 0; b < 17; b++) for (let g = 0; g < 17; g++) for (let r = 0; r < 17; r++) rows.push(`${r / 16} ${g / 16} ${b / 16}`);
+	const up = await (await as("/api/v1/admin/uploads", { method: "POST", body: `LUT_3D_SIZE 17\n${rows.join("\n")}\n`, headers: { "X-Filename": "warm.cube" } })).json();
+	const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+	const thumb = await (await as("/api/v1/admin/uploads", { method: "POST", body: png, headers: { "X-Filename": "t.png" } })).json();
+	const a = await (await as("/api/v1/admin/assets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ upload_id: up.id, thumbnail_upload_id: thumb.id, title: "Warm Film" }) })).json();
+	assert.equal((await as(`/api/v1/admin/assets/${a.id}/publish`, { method: "POST" })).status, 200);
+	const catalog = await (await fetch(`${s.base}/feed/stable/catalog.json`)).json();
+	const zip = await fetch(`${s.base}/feed/stable/${catalog.packs[0].files}`, { headers: { Range: "bytes=0-3" } });
+	assert.equal(zip.status, 206);
+	assert.equal(Buffer.from(await zip.arrayBuffer()).readUInt32LE(0), 0x04034b50);
+	const blobs = createS3Blobs(creds);
+	assert.equal((await blobs.head(`packages/${catalog.packs[0].files.split("/").pop()}`)).size, catalog.packs[0].sizeBytes);
+	assert.ok(await blobs.has(`originals/${up.sha256}`));
+	// Nothing is written to the local blob folder.
+	assert.equal(fs.existsSync(path.join(s.dataDir, "blobs", "packages")), false);
 });

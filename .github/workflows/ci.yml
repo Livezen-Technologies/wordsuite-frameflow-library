@@ -30,6 +30,22 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-noto-core
           npm ci --prefix apps/workers
           npx --prefix apps/workers playwright install --with-deps chromium
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: intl, sodium, pdo_pgsql, pgsql, sqlite3, zip
+          tools: composer:v2
+      - name: Backend (CodeIgniter) unit tests
+        working-directory: backend
+        run: |
+          composer install --no-interaction --no-progress
+          vendor/bin/phpunit --no-coverage
+      - name: API suite against the CodeIgniter backend (SQLite, then PostgreSQL)
+        run: |
+          npm run test:php
+          LIBRARY_PHP_DATABASE_URL=postgres://postgres:postgres@localhost:5432/library_test npm run test:php
+        env:
+          FRAMEFLOW_DIR: ${{ github.workspace }}/worksuite-frameflow
       - run: npm test
         env:
           FRAMEFLOW_DIR: ${{ github.workspace }}/worksuite-frameflow
@@ -38,3 +54,4 @@ jobs:
         run: |
           docker build -t frameflow-library .
           docker build -f apps/workers/Dockerfile -t frameflow-library-worker .
+          docker build -t frameflow-library-api backend
