@@ -21,8 +21,11 @@ try {
 let me = null;
 let categories = [];
 
+// "/library" when served at frameflow.worksuitecloud.com/library/admin/.
+const BASE = location.pathname.replace(/\/admin(\/.*)?$/, "");
+
 async function api(method, path, body, { raw, headers = {} } = {}) {
-	const res = await fetch(`/api/v1${path}`, {
+	const res = await fetch(`${BASE}/api/v1${path}`, {
 		method,
 		headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() } : {}), ...headers },
 		body: raw ?? (body ? JSON.stringify(body) : undefined),

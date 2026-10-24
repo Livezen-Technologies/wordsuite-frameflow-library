@@ -1,6 +1,6 @@
 # Deploys the Library API, admin web and FrameFlow feed to Cloudflare
 # (a Worker in front of one Container) at
-# https://library.frameflow.worksuitecloud.com. Run it from Actions → Deploy.
+# https://frameflow.worksuitecloud.com/library. Run it from Actions → Deploy.
 #
 # Repository secrets:
 #   CLOUDFLARE_API_TOKEN   Workers Scripts:Edit, Workers Routes:Edit, Containers:Edit,
@@ -86,7 +86,7 @@ jobs:
       - name: Smoke test
         run: |
           for i in $(seq 1 15); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://library.frameflow.worksuitecloud.com/healthz) && [ "$code" = 200 ] && echo "Live: HTTP $code" && exit 0
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://frameflow.worksuitecloud.com/library/healthz) && [ "$code" = 200 ] && echo "Live: HTTP $code" && exit 0
             echo "Waiting for the container (HTTP $code)…"; sleep 20
           done
-          echo "::error::https://library.frameflow.worksuitecloud.com/healthz didn't answer 200"; exit 1
+          echo "::error::https://frameflow.worksuitecloud.com/library/healthz didn't answer 200"; exit 1

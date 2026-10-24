@@ -1,7 +1,7 @@
 // Processing worker: claims jobs from the Library API, processes the
 // version's main file in a temp folder, uploads previews and reports checks.
 //
-//   LIBRARY_API_URL       e.g. https://library.frameflow.worksuitecloud.com
+//   LIBRARY_API_URL       e.g. https://frameflow.worksuitecloud.com/library
 //   LIBRARY_WORKER_TOKEN  a token with the `worker` role (LIBRARY_ADMIN_TOKENS "tok:worker:id")
 //   WORKER_CONCURRENCY    jobs at once (default 2)
 //   WORKER_POLL_MS        idle poll interval (default 5000)

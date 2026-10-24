@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The Library is now hosted at https://frameflow.worksuitecloud.com/library (admin at `/library/admin/`, feed at `/library/feed/`), next to the FrameFlow web editor, instead of library.frameflow.worksuitecloud.com.
+
 ### Added
 
 - PHP backend (`backend/`, CodeIgniter 4.7 on PHP 8.3): the Library API, FrameFlow feed and processing-worker endpoints with the same behaviour as the Node API, storing the library in PostgreSQL (or SQLite for development) tables and files in a local folder or R2/S3. Existing signing keys keep working, packs install in FrameFlow unchanged, and it ships as an nginx + php-fpm image on port 8080. The test suites can run against it with `LIBRARY_API_URL=php`.

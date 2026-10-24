@@ -68,7 +68,7 @@ for 10 minutes and retried up to 3 times; the admin API lists them
 
 ## Hosting
 
-`library.frameflow.worksuitecloud.com` runs on Cloudflare: a Worker in front
+`frameflow.worksuitecloud.com/library` runs on Cloudflare: a Worker in front
 of one Container built from the `Dockerfile` (`deploy/cloudflare/`), with
 PostgreSQL for state and R2 for files. Add the secrets listed at the top of
 `.github/workflows/deploy.yml`, then run **Actions → Deploy**. One container

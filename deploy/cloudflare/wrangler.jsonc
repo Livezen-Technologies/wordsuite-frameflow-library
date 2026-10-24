@@ -16,7 +16,8 @@
 		"bindings": [{ "name": "LIBRARY", "class_name": "LibraryContainer" }]
 	},
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["LibraryContainer"] }],
-	// The worksuitecloud.com zone must be in the same Cloudflare account.
-	"routes": [{ "pattern": "library.frameflow.worksuitecloud.com", "custom_domain": true }],
+	// The worksuitecloud.com zone must be in the same Cloudflare account. The
+	// web editor serves the rest of frameflow.worksuitecloud.com.
+	"routes": [{ "pattern": "frameflow.worksuitecloud.com/library*", "zone_name": "worksuitecloud.com" }],
 	"observability": { "enabled": true }
 }

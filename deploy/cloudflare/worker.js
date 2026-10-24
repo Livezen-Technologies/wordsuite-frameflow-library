@@ -30,8 +30,21 @@ export class LibraryContainer extends Container {
 	}
 }
 
+// Served at https://frameflow.worksuitecloud.com/library next to the web
+// editor: the prefix comes off before the container sees the request and
+// goes back on redirects.
+const PREFIX = "/library";
+
 export default {
 	async fetch(request, env) {
-		return getContainer(env.LIBRARY).fetch(request);
+		const url = new URL(request.url);
+		if (url.pathname === PREFIX) return Response.redirect(`${url.origin}${PREFIX}/`, 301);
+		if (url.pathname.startsWith(`${PREFIX}/`)) url.pathname = url.pathname.slice(PREFIX.length);
+		const response = await getContainer(env.LIBRARY).fetch(new Request(url, request));
+		const location = response.headers.get("Location");
+		if (!location?.startsWith("/") || location.startsWith("//")) return response;
+		const headers = new Headers(response.headers);
+		headers.set("Location", PREFIX + location);
+		return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 	},
 };
