@@ -1,7 +1,9 @@
 # FrameFlow Library API — CodeIgniter 4 backend
 
-A PHP 8.3 / CodeIgniter 4.7 port of the Node Library API (`apps/api`). Same
-HTTP surface and behaviour: the `/api/v1` client, admin and worker endpoints,
+The Library API on PHP 8.3 / CodeIgniter 4.7 (it started as a port of the
+retired Node service and keeps its HTTP surface): the `/api/v1` client, admin and worker endpoints
+plus everything in [`docs/api-v1-additions.md`](../docs/api-v1-additions.md)
+(devices, my library, `/sync/stream`, Meilisearch, collections, settings, webhooks),
 the signed FrameFlow feed (`/feed/<stable|beta>/catalog.json`, `.sig`,
 `/feed/<channel>/packs/<file>` with Range, ETag and Pro gating,
 `/feed/public-key.pem`), worker previews (`/previews/…`) and `/healthz`.
@@ -14,15 +16,18 @@ Layout follows the house CodeIgniter apps (`worksite-download/backend`):
 | `app/Config/Routes/{feed,client,admin,worker}.php` | Routes |
 | `app/Controllers/` | `BaseApiController` (transactions, errors, ETags), `ClientController`, `Admin/*`, `WorkerController`, `FeedController` |
 | `app/Filters/` | `AuthFilter` (`libauth`, `libauth:admin`), `PermissionFilter` (`perm:…`), `ResponseHeadersFilter` |
-| `app/Services/` | `LibraryService` (port of `service.js`), `LibraryStore` (tables ↔ API shapes), `AuthContext` |
+| `app/Services/` | `LibraryService`, `LibraryStore` (tables ↔ API shapes), `AuthContext`; `Concerns/` holds the v1-additions traits (client library, curation, settings, analytics, webhooks, their tables) |
 | `app/Libraries/AssetSchema.php` | The 12 types, validators, publish gate (port of `packages/asset-schema`) |
 | `app/Libraries/Rbac.php` | Roles → permissions |
 | `app/Libraries/Pack/` | Deterministic ZIP writer/inspector, pack + catalog builder |
 | `app/Libraries/Signing/Ed25519Key.php` | PKCS#8 PEM ↔ libsodium, SPKI public key |
 | `app/Libraries/Storage/` | Local folder and S3/R2 (SigV4) blob stores |
 | `app/Libraries/Auth/` | Static tokens, OIDC JWT verification (RS256/ES256/EdDSA via JWKS) |
-| `app/Database/Migrations/` | Tables: `assets`, `asset_versions`, `categories`, `uploads`, `sync_events`, `audit_log`, `user_downloads`, `usage_events`, `jobs`, `library_meta` |
-| `app/Commands/` | `library:schedule`, `library:keygen`, `library:reset` |
+| `app/Libraries/Search/MeiliSearch.php` | Optional Meilisearch index |
+| `app/Libraries/Webhooks/` | `WebhookSender` (signed POST, no redirects, 10 s), `UrlGuard` (SSRF) |
+| `app/Libraries/Http/SseResponse.php` | `/sync/stream` |
+| `app/Database/Migrations/` | Tables: `assets`, `asset_versions`, `categories`, `uploads`, `sync_events`, `audit_log`, `user_downloads`, `usage_events`, `jobs`, `library_meta` (signing key, settings), `devices`, `user_favorites`, `user_installs`, `collections`, `search_terms`, `search_misses`, `webhooks`, `webhook_deliveries` |
+| `app/Commands/` | `library:schedule`, `library:webhooks`, `library:reindex`, `library:keygen`, `library:reset` |
 
 ## Setup
 
@@ -42,7 +47,8 @@ is a super admin. Point FrameFlow at it with
 
 | Variable | Meaning |
 | --- | --- |
-| `DATABASE_URL` | `postgres://user:pass@host:5432/db[?sslmode=require]` (production) or `sqlite:/abs/path.sqlite` |
+| `database.default.DBDriver`, `.hostname`, `.port`, `.database`, `.username`, `.password` (`.DSN` for libpq options such as `sslmode`) | CodeIgniter's own database settings; production uses `Postgre` (what `deploy/cloudflare` sets) |
+| `DATABASE_URL` | Alternative: `postgres://user:pass@host:5432/db[?sslmode=require]` or `sqlite:/abs/path.sqlite`; overrides `database.default.*` when set |
 | `LIBRARY_ADMIN_TOKENS` | `token:role:userId,…`; roles `super_admin`, `library_manager`, `content_editor`, `reviewer`, `analyst`, `worker` |
 | `LIBRARY_OIDC_ISSUER` | Worksuite Cloud issuer; enables OIDC access tokens (plan from `plan`, roles from the role claim). With it set, `X-Plan` is ignored |
 | `LIBRARY_OIDC_AUDIENCE` | Expected `aud` (default `frameflow-library`) |
@@ -50,8 +56,12 @@ is a super admin. Point FrameFlow at it with
 | `LIBRARY_SIGNING_KEY` | Ed25519 private key, PEM PKCS#8 — the same format the Node service used, so an existing key keeps working. Literal `\n` escapes are accepted. Unset: a dev key stored in `library_meta` |
 | `LIBRARY_DATA_DIR` | Local blob folder (default `writable/library`) |
 | `LIBRARY_S3_ENDPOINT`, `LIBRARY_S3_BUCKET`, `LIBRARY_S3_ACCESS_KEY_ID`, `LIBRARY_S3_SECRET_ACCESS_KEY`, `LIBRARY_S3_REGION` (`auto`), `LIBRARY_S3_PREFIX` | Blobs in R2/S3/MinIO instead of the folder |
-| `LIBRARY_CORS_ORIGINS` | Comma-separated admin-web origins |
-| `LIBRARY_REQUIRE_PROCESSING` | `1`: publishing waits for the version's worker job (`processing.done`) |
+| `LIBRARY_CORS_ORIGINS` | Comma-separated admin-web origins (default of the `cors_origins` setting) |
+| `LIBRARY_REQUIRE_PROCESSING` | `1`: publishing waits for the version's worker job (`processing.done`); default of the `require_processing` setting |
+| `MEILI_URL`, `MEILI_KEY`, `MEILI_INDEX` (`library_assets`) | Optional Meilisearch: live assets are indexed on publish/update/unpublish and `GET /assets?q=` queries it (falls back to SQL search when it's unreachable). `php spark library:reindex` rebuilds the index |
+| `LIBRARY_WEBHOOKS_ALLOW_PRIVATE` | `1`: allow webhook targets on private/loopback addresses (development only) |
+| `LIBRARY_WEBHOOKS_BACKOFF` | Seconds before the 2nd and 3rd attempt, default `10,60` |
+| `LIBRARY_SSE_MAX_SECONDS`, `LIBRARY_SSE_POLL_MS`, `LIBRARY_SSE_PING_SECONDS` | `/sync/stream` lifetime (300), table poll (2000) and ping interval (25) |
 | `CLAMAV_HOST` | Reported in the `malware_scan` check (scanning runs in the workers) |
 | `CI_ENVIRONMENT` | `production` in deployments |
 
@@ -60,6 +70,9 @@ is a super admin. Point FrameFlow at it with
 ```sh
 php spark library:schedule            # run due scheduled publishes/unpublishes once
 php spark library:schedule --loop     # …every 60 s (scheduler container / sidecar)
+php spark library:webhooks            # send due webhook deliveries once
+php spark library:webhooks --loop     # …keep sending (the image runs this)
+php spark library:reindex             # rebuild the Meilisearch index (MEILI_URL)
 php spark library:keygen              # new LIBRARY_SIGNING_KEY (+ its public key)
 php spark library:keygen --public     # the running library's public key
 php spark library:reset --force       # drop and recreate all tables (tests)
@@ -71,32 +84,41 @@ The API also runs due schedules before each request, like the Node service.
 ## Tests
 
 ```sh
-vendor/bin/phpunit                    # validators, zip, Ed25519, SigV4 vectors, service on SQLite
+vendor/bin/phpunit                    # validators, zip, Ed25519, SigV4 vectors, service on SQLite (incl. devices, favorites, webhooks, tag merge, collections)
 ```
 
-Acceptance: the repository's JS suites run against this backend through
-`tests/harness.js`. `LIBRARY_API_URL=php` makes every `start()` spawn
-`php spark serve` on a free port with a fresh SQLite database and blob folder
+Acceptance: the repository's JS suite (`../tests`) runs against this backend
+through `tests/harness.js`: every `start()` spawns `php spark serve` on a free
+port with a fresh SQLite database and blob folder
 (`LIBRARY_PHP_DATABASE_URL=postgres://…` to use PostgreSQL instead; the
-database is reset with `library:reset` per test). An `http(s)://` value
+database is reset with `library:reset` per test). `LIBRARY_API_URL=http(s)://…`
 targets an already running server without resetting it.
 
 ```sh
-cd .. && LIBRARY_API_URL=php node --test --test-concurrency=1 tests/library.test.js tests/workers.test.js tests/storage.test.js
-LIBRARY_API_URL=php LIBRARY_PHP_DATABASE_URL=postgres://postgres@127.0.0.1:5432/library_ci node --test --test-concurrency=1 tests/library.test.js tests/workers.test.js
+cd .. && npm test
+LIBRARY_PHP_DATABASE_URL=postgres://postgres@127.0.0.1:5432/library_ci npm test
 ```
 
 ## Production image
 
 `Dockerfile` builds nginx + php-fpm in one image on port 8080; the entrypoint
 runs migrations, starts php-fpm, a once-a-minute `library:schedule` loop
-(`LIBRARY_SCHEDULER=0` to disable) and nginx. Uploads up to 2 GiB
+(`LIBRARY_SCHEDULER=0` to disable), the `library:webhooks --loop` queue
+(`LIBRARY_WEBHOOKS=0` to disable) and nginx. Uploads up to 2 GiB
 (`client_max_body_size`, `post_max_size`).
 
 ```sh
 docker build -t frameflow-library-api backend
 docker run -p 8080:8080 -e DATABASE_URL=postgres://… -e LIBRARY_SIGNING_KEY="$(cat key.pem)" frameflow-library-api
 ```
+
+## Notes on the v1 additions
+
+- Devices: with `LIBRARY_OIDC_ISSUER` set, `POST /assets/:id/download` needs `X-Device-Id` of one of the caller's active devices (`403 DEVICE_REQUIRED`); `POST /me/installs` checks the device the same way. A device the user removed can register again with the same fingerprint (it comes back as the same record, if the plan has room).
+- Webhooks: events are queued in the request's transaction and sent by `library:webhooks`; `POST /admin/webhooks/:id/test` sends its `ping` immediately (one attempt). A first publish sends `asset.published` and `version.published`; later version releases and rollbacks send `version.published`. Refused (private/reserved) targets fail at once without retries. Deliveries also report `status` and `finished_at`.
+- `/sync/stream` holds one php-fpm worker per client for up to 5 minutes (`pm.max_children = 32`).
+- Settings are saved whole: once saved, `require_processing` and `cors_origins` no longer follow `LIBRARY_REQUIRE_PROCESSING` / `LIBRARY_CORS_ORIGINS`.
+- Category edits, deletes and reorders write a `category_change` sync event.
 
 ## Differences from the Node service
 

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Libraries\Json;
+use App\Services\Concerns\StoresClientAndAdminRecords;
 use App\Models\AssetModel;
 use App\Models\AssetVersionModel;
 use App\Models\AuditLogModel;
@@ -22,6 +23,8 @@ use CodeIgniter\Database\BaseConnection;
  */
 class LibraryStore
 {
+    use StoresClientAndAdminRecords;
+
     public readonly BaseConnection $db;
 
     private AssetModel $assets;

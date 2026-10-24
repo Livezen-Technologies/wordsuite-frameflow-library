@@ -3,22 +3,16 @@
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
-	"description": "FrameFlow Asset Library & Download Center: Library API, admin web, shared asset schema and JS SDK.",
+	"description": "FrameFlow Asset Library & Download Center: acceptance tests for the CodeIgniter Library API (backend/), the JS SDK, asset schema and processing workers.",
 	"engines": {
 		"node": ">=22"
 	},
 	"scripts": {
-		"start": "node apps/api/src/server.js",
-		"dev": "node --watch apps/api/src/server.js",
+		"start": "cd backend && php spark serve",
 		"test": "node --test --test-concurrency=1 tests/*.test.js",
-		"test:php": "LIBRARY_API_URL=php node --test --test-concurrency=1 tests/*.test.js"
-	},
-	"dependencies": {
-		"pg": "^8.23.1"
+		"test:backend": "cd backend && vendor/bin/phpunit --no-coverage"
 	},
 	"devDependencies": {
-		"@aws-crypto/sha256-js": "^5.2.0",
-		"@smithy/signature-v4": "^5.7.4",
 		"s3rver": "^3.7.1"
 	}
 }

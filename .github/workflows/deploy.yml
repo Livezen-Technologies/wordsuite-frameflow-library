@@ -1,18 +1,28 @@
-# Deploys the Library API, admin web and FrameFlow feed to Cloudflare
-# (a Worker in front of one Container) at
-# https://library.frameflow.worksuitecloud.com. Run it from Actions → Deploy.
+# Deploys https://library.frameflow.worksuitecloud.com to Cloudflare: one Worker that
+# serves the built frontend (Workers static assets, SPA fallback) and sends /api/*,
+# /feed/*, /previews/* and /healthz to the Library API container (backend/Dockerfile);
+# a cron trigger keeps one processing-worker container (apps/workers) running.
+# Run it from Actions → Deploy.
 #
-# Repository secrets:
+# Repository secrets (GitHub secret names can't contain dots; the Worker secrets they
+# become use CodeIgniter's own names, `database.default.*`):
 #   CLOUDFLARE_API_TOKEN   Workers Scripts:Edit, Workers Routes:Edit, Containers:Edit,
 #                          Zone DNS:Edit on worksuitecloud.com
 #   CLOUDFLARE_ACCOUNT_ID
-#   DATABASE_URL                     PostgreSQL (e.g. Neon, Supabase, RDS)
-#   LIBRARY_SIGNING_KEY              PEM Ed25519 private key; the same key as FrameFlow's
-#                                    ASSET_SIGNING_KEY so the app's built-in key verifies it
-#   LIBRARY_S3_ENDPOINT              https://<account id>.r2.cloudflarestorage.com
+#   DB_HOSTNAME, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD
+#                          PostgreSQL → database.default.hostname/port/database/username/password
+#                          (database.default.DBDriver=Postgre is set in wrangler.jsonc)
+#   LIBRARY_SIGNING_KEY    PEM Ed25519 private key; the same key as FrameFlow's
+#                          ASSET_SIGNING_KEY so the app's built-in key verifies it
+#   LIBRARY_S3_ENDPOINT    https://<account id>.r2.cloudflarestorage.com
 #   LIBRARY_S3_BUCKET, LIBRARY_S3_ACCESS_KEY_ID, LIBRARY_S3_SECRET_ACCESS_KEY   (an R2 API token)
-#   LIBRARY_OIDC_ISSUER              e.g. https://accounts.worksuitecloud.com
-#   LIBRARY_ADMIN_TOKENS             optional: server-to-server tokens, "token:role:id,…"
+#   LIBRARY_OIDC_ISSUER    e.g. https://accounts.worksuitecloud.com (also built into the frontend)
+#   LIBRARY_ADMIN_TOKENS   server-to-server tokens, "token:role:id,…"; include the processing
+#                          worker's token, e.g. "<LIBRARY_WORKER_TOKEN>:worker:worker-1"
+#   LIBRARY_WORKER_TOKEN   the processing worker's token (without it no worker is started)
+# Optional:
+#   MEILI_URL, MEILI_KEY, MEILI_INDEX   Meilisearch for search (unset: SQL search)
+#   LIBRARY_CORS_ORIGINS, CLAMAV_HOST, LIBRARY_ADMIN_OIDC_CLIENT_ID (frontend sign-in client id)
 name: Deploy
 
 on:
@@ -37,7 +47,10 @@ jobs:
 
       - name: Check secrets
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DB_HOSTNAME: ${{ secrets.DB_HOSTNAME }}
+          DB_DATABASE: ${{ secrets.DB_DATABASE }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           LIBRARY_SIGNING_KEY: ${{ secrets.LIBRARY_SIGNING_KEY }}
           LIBRARY_S3_ENDPOINT: ${{ secrets.LIBRARY_S3_ENDPOINT }}
           LIBRARY_S3_BUCKET: ${{ secrets.LIBRARY_S3_BUCKET }}
@@ -46,26 +59,50 @@ jobs:
           LIBRARY_OIDC_ISSUER: ${{ secrets.LIBRARY_OIDC_ISSUER }}
         run: |
           missing=""
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID DATABASE_URL LIBRARY_SIGNING_KEY LIBRARY_S3_ENDPOINT LIBRARY_S3_BUCKET LIBRARY_S3_ACCESS_KEY_ID LIBRARY_S3_SECRET_ACCESS_KEY LIBRARY_OIDC_ISSUER; do
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID DB_HOSTNAME DB_DATABASE DB_USERNAME DB_PASSWORD LIBRARY_SIGNING_KEY LIBRARY_S3_ENDPOINT LIBRARY_S3_BUCKET LIBRARY_S3_ACCESS_KEY_ID LIBRARY_S3_SECRET_ACCESS_KEY LIBRARY_OIDC_ISSUER; do
             [ -n "${!name}" ] || missing="$missing $name"
           done
           if [ -n "$missing" ]; then echo "::error::Missing repository secrets:$missing"; exit 1; fi
 
-      - run: npm ci
-      - run: npm test
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: intl, sodium, pdo_pgsql, pgsql, sqlite3, zip, curl
+          tools: composer:v2
+
+      - name: Tests (PHPUnit + acceptance suite on SQLite)
+        run: |
+          composer install --no-interaction --no-progress --working-dir backend
+          (cd backend && vendor/bin/phpunit --no-coverage)
+          npm ci
+          npm test
+
+      # The Worker serves frontend/dist as static assets, so build it first.
+      - name: Build the frontend
+        working-directory: frontend
+        env:
+          VITE_OIDC_ISSUER: ${{ secrets.LIBRARY_OIDC_ISSUER }}
+          VITE_OIDC_CLIENT_ID: ${{ secrets.LIBRARY_ADMIN_OIDC_CLIENT_ID }}
+        run: |
+          npm ci
+          npm run build
 
       - name: Install deploy tools
         working-directory: deploy/cloudflare
         run: npm ci
 
-      - name: Deploy Worker and Container
+      - name: Deploy Worker, assets and containers
         working-directory: deploy/cloudflare
         run: npx wrangler deploy
 
       - name: Set runtime secrets
         working-directory: deploy/cloudflare
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DB_HOSTNAME: ${{ secrets.DB_HOSTNAME }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_DATABASE: ${{ secrets.DB_DATABASE }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           LIBRARY_SIGNING_KEY: ${{ secrets.LIBRARY_SIGNING_KEY }}
           LIBRARY_S3_ENDPOINT: ${{ secrets.LIBRARY_S3_ENDPOINT }}
           LIBRARY_S3_BUCKET: ${{ secrets.LIBRARY_S3_BUCKET }}
@@ -73,20 +110,42 @@ jobs:
           LIBRARY_S3_SECRET_ACCESS_KEY: ${{ secrets.LIBRARY_S3_SECRET_ACCESS_KEY }}
           LIBRARY_OIDC_ISSUER: ${{ secrets.LIBRARY_OIDC_ISSUER }}
           LIBRARY_ADMIN_TOKENS: ${{ secrets.LIBRARY_ADMIN_TOKENS }}
+          LIBRARY_WORKER_TOKEN: ${{ secrets.LIBRARY_WORKER_TOKEN }}
+          LIBRARY_CORS_ORIGINS: ${{ secrets.LIBRARY_CORS_ORIGINS }}
+          CLAMAV_HOST: ${{ secrets.CLAMAV_HOST }}
+          MEILI_URL: ${{ secrets.MEILI_URL }}
+          MEILI_KEY: ${{ secrets.MEILI_KEY }}
+          MEILI_INDEX: ${{ secrets.MEILI_INDEX }}
         run: |
-          node -e 'const k=["DATABASE_URL","LIBRARY_SIGNING_KEY","LIBRARY_S3_ENDPOINT","LIBRARY_S3_BUCKET","LIBRARY_S3_ACCESS_KEY_ID","LIBRARY_S3_SECRET_ACCESS_KEY","LIBRARY_OIDC_ISSUER","LIBRARY_ADMIN_TOKENS"];process.stdout.write(JSON.stringify(Object.fromEntries(k.filter(n=>process.env[n]).map(n=>[n,process.env[n]]))))' > "$RUNNER_TEMP/secrets.json"
+          node -e '
+            const e = process.env;
+            const out = {
+              "database.default.hostname": e.DB_HOSTNAME,
+              "database.default.port": e.DB_PORT || "5432",
+              "database.default.database": e.DB_DATABASE,
+              "database.default.username": e.DB_USERNAME,
+              "database.default.password": e.DB_PASSWORD,
+            };
+            for (const k of ["LIBRARY_SIGNING_KEY", "LIBRARY_S3_ENDPOINT", "LIBRARY_S3_BUCKET", "LIBRARY_S3_ACCESS_KEY_ID", "LIBRARY_S3_SECRET_ACCESS_KEY", "LIBRARY_OIDC_ISSUER", "LIBRARY_ADMIN_TOKENS", "LIBRARY_WORKER_TOKEN", "LIBRARY_CORS_ORIGINS", "CLAMAV_HOST", "MEILI_URL", "MEILI_KEY", "MEILI_INDEX"]) if (e[k]) out[k] = e[k];
+            process.stdout.write(JSON.stringify(out));
+          ' > "$RUNNER_TEMP/secrets.json"
           npx wrangler secret bulk "$RUNNER_TEMP/secrets.json"
           rm -f "$RUNNER_TEMP/secrets.json"
 
-      # The container reads its environment when it starts: deploy again so it starts with the secrets.
+      # Containers read their environment when they start: deploy again so they start with the secrets.
       - name: Restart with secrets
         working-directory: deploy/cloudflare
         run: npx wrangler deploy
 
       - name: Smoke test
         run: |
+          host=https://library.frameflow.worksuitecloud.com
           for i in $(seq 1 15); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://library.frameflow.worksuitecloud.com/healthz) && [ "$code" = 200 ] && echo "Live: HTTP $code" && exit 0
+            code=$(curl -s -o /dev/null -w '%{http_code}' $host/healthz) && [ "$code" = 200 ] && echo "API live: HTTP $code" && break
             echo "Waiting for the container (HTTP $code)…"; sleep 20
           done
-          echo "::error::https://library.frameflow.worksuitecloud.com/healthz didn't answer 200"; exit 1
+          [ "$code" = 200 ] || { echo "::error::$host/healthz didn't answer 200"; exit 1; }
+          curl -sf -o /dev/null $host/feed/stable/catalog.json || { echo "::error::feed didn't answer"; exit 1; }
+          # A client route that only exists in the SPA must still return index.html.
+          curl -sf $host/library/some-asset | grep -qi '<div id="root"' || { echo "::error::SPA fallback didn't serve index.html"; exit 1; }
+          echo "Frontend live"

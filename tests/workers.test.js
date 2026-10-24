@@ -7,7 +7,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { createServer, parseTokens } from "../apps/api/src/server.js";
 import { createApiClient } from "../apps/workers/src/client.js";
 import { closeBrowser } from "../apps/workers/src/lottie.js";
 import { gradeFilter, xfadeFor } from "../apps/workers/src/processors.js";
@@ -47,7 +46,7 @@ function fixtures(dir) {
 
 async function start({ requireProcessing = false } = {}) {
 	const tokens = "su:super_admin:u1,wk:worker:w1,wk2:worker:w2,ed:content_editor:u2";
-	const { server, lib, base } = await startTarget({ tokens, env: { LIBRARY_REQUIRE_PROCESSING: requireProcessing ? "1" : "" }, node: () => createServer({ dataDir: tmp(), tokens: parseTokens(tokens), requireProcessing }) });
+	const { server, base } = await startTarget({ tokens, env: { LIBRARY_REQUIRE_PROCESSING: requireProcessing ? "1" : "" } });
 	const call = async (method, p, { token = "su", body, raw, headers = {} } = {}) => {
 		const res = await fetch(base + p, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}), ...headers }, body: raw ?? (body ? JSON.stringify(body) : undefined) });
 		const text = await res.text();
@@ -63,7 +62,7 @@ async function start({ requireProcessing = false } = {}) {
 		assert.equal(a.status, 201, JSON.stringify(a.data));
 		return a.data;
 	};
-	return { server, lib, base, call, create };
+	return { server, base, call, create };
 }
 
 const drain = async (api, log = []) => {

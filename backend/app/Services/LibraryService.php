@@ -11,9 +11,15 @@ use App\Libraries\Pack\PackBuilder;
 use App\Libraries\Pack\Zip;
 use App\Libraries\Pack\ZipProblem;
 use App\Libraries\Rbac;
+use App\Libraries\Search\MeiliSearch;
 use App\Libraries\Signing\Ed25519Key;
 use App\Libraries\Storage\BlobStoreInterface;
 use App\Libraries\Uuid7;
+use App\Services\Concerns\ManagesCuration;
+use App\Services\Concerns\ManagesSettings;
+use App\Services\Concerns\ManagesWebhooks;
+use App\Services\Concerns\ReportsAnalytics;
+use App\Services\Concerns\ServesClientLibrary;
 
 /**
  * The Library: assets, versions, workflow, publishing, the sync feed, the
@@ -22,9 +28,18 @@ use App\Libraries\Uuid7;
  *
  * Actors are `['id' => …, 'role' => …]`; clients are
  * `['plan', 'device_id', 'user_id', 'appVersion']`.
+ *
+ * The docs/api-v1-additions.md features live in traits (Concerns/): the
+ * user's devices and library, curation, settings, analytics and webhooks.
  */
 class LibraryService
 {
+    use ManagesCuration;
+    use ManagesSettings;
+    use ManagesWebhooks;
+    use ReportsAnalytics;
+    use ServesClientLibrary;
+
     public const DEFAULT_CATEGORIES = [
         'graphic'        => ['Overlays', 'Shapes', 'Frames'],
         'sfx'            => ['Transitions', 'UI', 'Ambience', 'Music beds'],
@@ -46,6 +61,9 @@ class LibraryService
 
     /** Client IP recorded in the audit log. */
     public ?string $ip = null;
+
+    /** Optional Meilisearch index (MEILI_URL); null: SQL search. */
+    public ?MeiliSearch $search = null;
 
     public function __construct(
         public readonly LibraryStore $store,
@@ -134,6 +152,30 @@ class LibraryService
     private function syncEvent(string $op, array $asset, array $extra = []): void
     {
         $this->store->addSyncEvent($op, $asset, $extra, $this->iso());
+    }
+
+    /**
+     * After a change to a live (or just unpublished) asset: queue webhook
+     * events and update the search index. Indexing failures never fail the
+     * change; SQL search covers until the next update.
+     */
+    private function notify(array $events, array $asset, ?string $version = null): void
+    {
+        foreach ($events as $e) {
+            $this->enqueueWebhook($e, $asset, $version);
+        }
+        if ($this->search === null) {
+            return;
+        }
+        try {
+            if (self::isLive($asset)) {
+                $this->search->upsert($asset, $this->categoryOf($asset));
+            } else {
+                $this->search->delete($asset['id']);
+            }
+        } catch (\Throwable $e) {
+            log_message('warning', '[library] search index update failed: {msg}', ['msg' => $e->getMessage()]);
+        }
     }
 
     public function getAssetOrNull(string $id): ?array
@@ -505,10 +547,10 @@ class LibraryService
     }
 
     /** Public bytes of a preview: ['key', 'size', 'etag'] or null. */
-    public function previewFile(string $assetId, string $version, string $file): ?array
+    public function previewFile(string $assetId, string $version, string $file, bool $drafts = false): ?array
     {
         $a = $this->store->findAsset($assetId);
-        if ($a === null || ! self::isLive($a)) {
+        if ($a === null || (! $drafts && ! self::isLive($a))) {
             return null;
         }
         $v = self::versionOf($a, $version);
@@ -663,6 +705,9 @@ class LibraryService
         $this->audit($actor, 'asset.update', 'asset', $asset['id'], $before, $asset);
         if ($asset['status'] === 'published') {
             $this->syncEvent('upsert', $asset, ['changed' => array_keys($next), 'update_available' => false, 'breaking' => false]);
+            $this->notify(['asset.updated'], $asset);
+        } elseif ($before['status'] === 'published' || $before['status'] === 'deprecated') {
+            $this->notify([], $asset);
         }
 
         return $asset;
@@ -794,7 +839,7 @@ class LibraryService
             $deps[] = (is_string($did) ? $this->store->findAsset($did) : null) ?? ['id' => $did, 'status' => 'missing'];
         }
         $processing = $asset['versions'][$index]['processing']['status'] ?? null;
-        if ($this->requireProcessing && $processing !== 'done') {
+        if ($this->processingRequired() && $processing !== 'done') {
             throw new ValidationError('This version is still being processed.', [['field' => 'processing', 'rule' => 'processing.done', 'message' => 'Processing is ' . ($processing ?? 'not started') . '.']], 'PUBLISH_BLOCKED');
         }
         // A new version of a live asset is released by whoever may publish; first releases go through review.
@@ -838,6 +883,7 @@ class LibraryService
         $this->store->saveAsset($asset);
         $this->syncEvent('upsert', $asset, ['changed' => $previous ? ['version'] : ['created'], 'update_available' => (bool) $previous, 'breaking' => $v['is_breaking']]);
         $this->audit($actor, 'asset.publish', 'asset', $asset['id'], $before, $asset);
+        $this->notify($previous ? ['version.published'] : ['asset.published', 'version.published'], $asset, $v['version']);
 
         return $asset;
     }
@@ -853,6 +899,8 @@ class LibraryService
         $this->store->saveAsset($asset);
         $this->syncEvent($op === 'deprecate' ? 'deprecate' : 'unpublish', $asset, ['reason' => $reason]);
         $this->audit($actor, "asset.{$op}", 'asset', $asset['id'], $before, $asset);
+        $wasLive = in_array($before['status'], ['published', 'deprecated'], true);
+        $this->notify($op === 'deprecate' ? ['asset.deprecated'] : ($wasLive ? ['asset.unpublished'] : []), $asset);
 
         return $asset;
     }
@@ -883,6 +931,7 @@ class LibraryService
         $this->store->saveAsset($asset);
         $this->syncEvent('upsert', $asset, ['changed' => ['version'], 'update_available' => true, 'breaking' => false, 'rollback' => true]);
         $this->audit($actor, 'version.rollback', 'asset', $asset['id'], $before, $asset);
+        $this->notify(['version.published'], $asset, $version);
 
         return $asset;
     }
@@ -1087,9 +1136,13 @@ class LibraryService
             $list = array_filter($list, static fn ($a) => S::compareSemver($q['appVersion'], $a['min_app_version']) >= 0);
         }
         $scored = [];
+        $rank   = $needle !== '' ? $this->searchIndexRank($needle) : null;
         foreach ($list as $a) {
             $s = 0;
-            if ($needle !== '') {
+            if ($rank !== null) {
+                // Meilisearch relevance (typos, synonyms) replaces the SQL scoring.
+                $s = isset($rank[$a['id']]) ? count($rank) - $rank[$a['id']] : -1;
+            } elseif ($needle !== '') {
                 $title = mb_strtolower($a['title']);
                 if (str_starts_with($title, $needle)) {
                     $s = 3;
@@ -1128,6 +1181,40 @@ class LibraryService
         return ['data' => $page, 'next_cursor' => $start + $n < count($scored) ? (string) ($start + $n) : null, 'total' => count($scored)];
     }
 
+    /** Meilisearch rank (id => position) for a query, or null to use SQL search. */
+    private function searchIndexRank(string $q): ?array
+    {
+        if ($this->search === null) {
+            return null;
+        }
+        try {
+            return array_flip($this->search->search($q));
+        } catch (\Throwable $e) {
+            log_message('warning', '[library] search index query failed, using SQL search: {msg}', ['msg' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    /** Re-indexes every live asset (and drops the others) in Meilisearch. */
+    public function reindexSearch(): int
+    {
+        $n = 0;
+        foreach ($this->store->allAssets() as $a) {
+            if ($this->search === null) {
+                break;
+            }
+            if (self::isLive($a)) {
+                $this->search->upsert($a, $this->categoryOf($a));
+                $n++;
+            } else {
+                $this->search->delete($a['id']);
+            }
+        }
+
+        return $n;
+    }
+
     public function assetDetail(string $id, array $client = []): array
     {
         $a = $this->store->findAsset($id);
@@ -1160,6 +1247,9 @@ class LibraryService
         $d = $this->assetDetail($id, $opts);
         if (! $d['entitlement']['can_download']) {
             throw new HttpError(403, 'NOT_ENTITLED', "This asset needs a {$d['licence_tier']} plan.");
+        }
+        if (! empty($opts['require_device'])) {
+            $opts['device_id'] = $this->mustOwnDevice($opts['user_id'] ?? null, $opts['device_id'] ?? null)['id'];
         }
         $a       = $this->mustAsset($id);
         $version = $opts['version'] ?? $a['published_version'];
@@ -1208,7 +1298,7 @@ class LibraryService
         return $this->store->download($id);
     }
 
-    public function recordUsage(mixed $events): array
+    public function recordUsage(mixed $events, ?string $userId = null): array
     {
         foreach (array_slice(is_array($events) ? array_values($events) : [], 0, 500) as $e) {
             if (! is_array($e) || ! is_string($e['asset_id'] ?? null)) {
@@ -1222,7 +1312,11 @@ class LibraryService
                 $a['stats']['applies']++;
                 $this->store->saveAsset($a);
             }
-            $this->store->addUsage(['id' => Uuid7::generate(), 'user_id' => null, 'device_id' => is_scalar($e['device_id'] ?? null) ? (string) $e['device_id'] : null, 'asset_id' => $a['id'], 'event' => $e['event'], 'at' => $this->iso()]);
+            $device = is_scalar($e['device_id'] ?? null) ? (string) $e['device_id'] : null;
+            $this->store->addUsage(['id' => Uuid7::generate(), 'user_id' => $userId, 'device_id' => $device, 'asset_id' => $a['id'], 'event' => $e['event'], 'at' => $this->iso()]);
+            if ($userId !== null && $device !== null && $e['event'] !== 'preview') {
+                $this->store->touchInstall($userId, $device, $a['id'], $this->iso());
+            }
         }
 
         return ['accepted' => true];
@@ -1254,7 +1348,8 @@ class LibraryService
         return $out;
     }
 
-    public function collections(): array
+    /** Featured, New this week and Trending. */
+    private function builtinCollections(): array
     {
         $featured = [];
         foreach ($this->store->allAssets() as $a) {
@@ -1278,7 +1373,7 @@ class LibraryService
         if (! in_array($channel, ['stable', 'beta'], true)) {
             throw HttpError::notFound('Channel');
         }
-        $vis     = $channel === 'beta' ? ['public', 'internal'] : ['public'];
+        $vis     = $this->settings()['feed'][$channel];
         $entries = [];
         foreach ($this->store->allAssets() as $asset) {
             if ($asset['status'] === 'published' && in_array($asset['visibility'], $vis, true)) {
@@ -1357,11 +1452,12 @@ class LibraryService
         return ['data' => array_map(fn ($a) => $a + ['category' => $this->categoryOf($a)], array_slice($list, $start, max(0, $n))), 'next_cursor' => $start + $n < count($list) ? (string) ($start + $n) : null, 'total' => count($list)];
     }
 
-    public function overview(): array
+    public function overview(array $q = []): array
     {
+        [$from, $to] = self::window($q);
         $assets = $this->store->allAssets();
         $by     = static fn (string $s) => count(array_filter($assets, static fn ($a) => $a['status'] === $s));
-        $dl     = $this->store->downloadsSince(Clock::iso(Clock::ms() - 30 * 86_400_000));
+        $dl     = $this->store->downloadsBetween($from, $to);
         $byDay  = [];
         foreach ($dl as $d) {
             $day         = substr($d['started_at'], 0, 10);
@@ -1382,7 +1478,7 @@ class LibraryService
             'downloads_by_day'   => Json::obj($byDay),
             'top_assets'         => array_map(static fn ($a) => ['id' => $a['id'], 'title' => $a['title'], 'type' => $a['type'], 'downloads' => $a['stats']['downloads'], 'applies' => $a['stats']['applies'], 'version' => $a['published_version'] ?? $a['current_version']], array_slice($top, 0, 5)),
             'review_queue'       => array_values(array_map(static fn ($a) => ['id' => $a['id'], 'title' => $a['title'], 'type' => $a['type']], array_filter($assets, static fn ($a) => $a['status'] === 'ready_for_review'))),
-        ];
+        ] + $this->overviewAdditions($dl, $from, $to);
     }
 
     public function auditLog(?string $entityId, int $limit = 200): array

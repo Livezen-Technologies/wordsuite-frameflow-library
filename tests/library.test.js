@@ -1,44 +1,16 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import zlib from "node:zlib";
+import crypto from "node:crypto";
 import { parseCube, svgProblems, lottieInfo, detectType, uploadChecks, publishProblems, tagsByScript } from "../packages/asset-schema/index.js";
-import { createServer, parseTokens } from "../apps/api/src/server.js";
-import { createZip, inspectZip, verify } from "../apps/api/src/pack.js";
-import { startTarget, target } from "./harness.js";
+import { caller, startTarget, target, tmp } from "./harness.js";
+import { cube, lottie, png } from "./fixtures.js";
+import { startIssuer } from "./oidc.js";
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "fflib-"));
-
-// ---------- fixtures ----------
-
-function cube(size = 17) {
-	const rows = [];
-	for (let b = 0; b < size; b++) for (let g = 0; g < size; g++) for (let r = 0; r < size; r++) rows.push(`${(r / (size - 1)).toFixed(4)} ${(g / (size - 1)).toFixed(4)} ${(b / (size - 1)).toFixed(4)}`);
-	return `TITLE "Test"\nLUT_3D_SIZE ${size}\n${rows.join("\n")}\n`;
-}
-
-function png(w, h) {
-	const chunk = (type, data) => {
-		const len = Buffer.alloc(4);
-		len.writeUInt32BE(data.length);
-		const body = Buffer.concat([Buffer.from(type), data]);
-		const crc = Buffer.alloc(4);
-		crc.writeUInt32BE(zlib.crc32 ? zlib.crc32(body) : 0);
-		return Buffer.concat([len, body, crc]);
-	};
-	const ihdr = Buffer.alloc(13);
-	ihdr.writeUInt32BE(w, 0);
-	ihdr.writeUInt32BE(h, 4);
-	ihdr[8] = 8;
-	ihdr[9] = 6;
-	const raw = Buffer.alloc((w * 4 + 1) * h);
-	return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
-}
-
-const lottie = { v: "5.7.4", fr: 30, ip: 0, op: 60, w: 512, h: 512, layers: [{ ty: 4, nm: "shape" }, { ty: 5, nm: "Title" }], assets: [] };
+/** Ed25519 detached signature (base64) of `text` under a PEM public key. */
+const verify = (text, sigB64, publicPem) => crypto.verify(null, Buffer.from(text), crypto.createPublicKey(publicPem), Buffer.from(String(sigB64).trim(), "base64"));
 
 // ---------- schema ----------
 
@@ -76,16 +48,6 @@ test("upload gate: extension, magic bytes, type detection", () => {
 	assert.ok(uploadChecks({ filename: "a.png", type: "graphic", buf: png(600, 600) }).every((c) => c.passed));
 });
 
-test("zip guard rejects traversal and zip bombs", () => {
-	const zip = createZip([{ name: "ok/a.txt", data: "x" }]);
-	assert.deepEqual(inspectZip(zip), ["ok/a.txt"]);
-	const evil = Buffer.from(zip);
-	const at = evil.indexOf("ok/a.txt", evil.length - 40);
-	evil.write("../a.txt", at);
-	assert.throws(() => inspectZip(evil), (e) => e.rule === "zip.path");
-	assert.throws(() => inspectZip(createZip([{ name: "big", data: Buffer.alloc(5_000_000) }])), (e) => e.rule === "zip.ratio");
-});
-
 test("tags split by script for FrameFlow search", () => {
 	assert.deepEqual(tagsByScript(["warm", "උණුසුම්", "சூடான"]), { en: ["warm"], si: ["උණුසුම්"], ta: ["சூடான"] });
 });
@@ -97,25 +59,13 @@ test("publish gate lists every blocker", () => {
 
 // ---------- API ----------
 
-// LIBRARY_API_URL=php runs these against the CodeIgniter backend (tests/harness.js).
+// A fresh CodeIgniter backend per test (tests/harness.js).
 async function start() {
 	const tokens = "su:super_admin:u1,ed:content_editor:u2,rv:reviewer:u3,mg:library_manager:u4";
-	const { server, lib, base, dataDir } = await startTarget({ tokens, node: async () => ({ ...(await createServer({ dataDir: tmp(), tokens: parseTokens(tokens) })), dataDir: null }) });
-	const call = async (method, p, { token, body, raw, headers = {} } = {}) => {
-		const res = await fetch(base + p, {
-			method,
-			headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { "Content-Type": "application/json" } : {}), ...headers },
-			body: raw ?? (body ? JSON.stringify(body) : undefined),
-		});
-		const text = await res.text();
-		let data = text;
-		try {
-			data = JSON.parse(text);
-		} catch {}
-		return { status: res.status, data, headers: res.headers };
-	};
+	const { server, base, dataDir } = await startTarget({ tokens });
+	const call = caller(base);
 	const upload = (token, filename, buf) => call("POST", "/api/v1/admin/uploads", { token, raw: buf, headers: { "X-Filename": encodeURIComponent(filename) } });
-	return { server, lib, base, call, upload, dataDir };
+	return { server, base, call, upload, dataDir };
 }
 
 test("workflow: upload → draft → review → approve → publish → feed → sync, with RBAC and audit", async (t) => {
@@ -278,30 +228,9 @@ test("JS SDK talks to the API", async (t) => {
 	await assert.rejects(client.asset("nope"), (e) => e.status === 404 && e.code === "NOT_FOUND");
 });
 
-test("OIDC: verified tokens carry plan and admin role; Pro packs need the plan", async (t) => {
-	const crypto = await import("node:crypto");
-	const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
-	const jwk = { ...publicKey.export({ format: "jwk" }), kid: "k1", alg: "RS256", use: "sig" };
-	let issuer = "https://accounts.test";
-	const fakeFetch = async (u) => new Response(JSON.stringify(String(u).endsWith("openid-configuration") ? { jwks_uri: `${issuer}/jwks` } : { keys: [jwk] }));
-	// Against an external backend the issuer must be reachable over HTTP, so serve the discovery document and JWKS.
-	let issuerServer = null;
-	if (target !== "node") {
-		const http = await import("node:http");
-		issuerServer = http.createServer((req, res) => {
-			res.setHeader("Content-Type", "application/json");
-			res.end(JSON.stringify(req.url.endsWith("openid-configuration") ? { issuer, jwks_uri: `${issuer}/jwks` } : { keys: [jwk] }));
-		});
-		await new Promise((r) => issuerServer.listen(0, "127.0.0.1", r));
-		issuer = `http://127.0.0.1:${issuerServer.address().port}`;
-		t.after(() => issuerServer.close());
-	}
-	const jwt = (claims, key = privateKey) => {
-		const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-		const head = `${enc({ alg: "RS256", kid: "k1", typ: "JWT" })}.${enc({ iss: issuer, aud: "frameflow-library", exp: Math.floor(Date.now() / 1000) + 600, ...claims })}`;
-		return `${head}.${crypto.sign("sha256", Buffer.from(head), key).toString("base64url")}`;
-	};
-	const { server, base } = await startTarget({ tokens: "", env: { LIBRARY_OIDC_ISSUER: issuer }, node: () => createServer({ dataDir: tmp(), tokens: new Map(), oidc: { issuer }, fetch: fakeFetch }) });
+test("OIDC: verified tokens carry plan and admin role; Pro packs need the plan", { skip: target === "external" && "starts its own backend" }, async (t) => {
+	const { issuer, jwt } = await startIssuer(t);
+	const { server, base } = await startTarget({ tokens: "", env: { LIBRARY_OIDC_ISSUER: issuer } });
 	t.after(() => server.close());
 	const as = (token, p, init = {}) => fetch(base + p, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) } });
 
@@ -326,8 +255,13 @@ test("OIDC: verified tokens carry plan and admin role; Pro packs need the plan",
 	assert.equal((await fetch(`${base}/feed/stable/${zip}`, { headers: { "X-Plan": "pro" } })).status, 401);
 	assert.equal((await as(user, `/feed/stable/${zip}`)).status, 403);
 	assert.equal((await as(pro, `/feed/stable/${zip}`)).status, 200);
+	// Download grants need a registered device of the caller.
+	const noDevice = await as(pro, `/api/v1/assets/${a.id}/download`, { method: "POST" });
+	assert.equal(noDevice.status, 403);
+	assert.equal((await noDevice.json()).error.code, "DEVICE_REQUIRED");
+	const device = await (await as(pro, "/api/v1/devices/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fingerprint_hash: "sha256-pro-laptop", os: "macos", app_version: "2.1.0" }) })).json();
 	// A grant's signed URL works without the token (e.g. handed to a download manager).
-	const grant = await (await as(pro, `/api/v1/assets/${a.id}/download`, { method: "POST" })).json();
+	const grant = await (await as(pro, `/api/v1/assets/${a.id}/download`, { method: "POST", headers: { "X-Device-Id": device.id } })).json();
 	assert.equal((await fetch(base + grant.url)).status, 200);
-	assert.equal((await as(user, `/api/v1/assets/${a.id}/download`, { method: "POST" })).status, 403);
+	assert.equal((await as(user, `/api/v1/assets/${a.id}/download`, { method: "POST", headers: { "X-Device-Id": device.id } })).status, 403);
 });

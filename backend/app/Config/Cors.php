@@ -25,5 +25,11 @@ class Cors extends BaseConfig
     {
         parent::__construct();
         $this->default['allowedOrigins'] = config(Library::class)->corsOrigins;
+        // Admin settings (cors_origins) replace the environment's list once saved.
+        try {
+            $this->default['allowedOrigins'] = service('library')->settings()['cors_origins'];
+        } catch (\Throwable) {
+            // No database yet (first migrate): keep LIBRARY_CORS_ORIGINS.
+        }
     }
 }

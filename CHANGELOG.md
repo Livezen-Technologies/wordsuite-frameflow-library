@@ -7,6 +7,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Device sign-in: FrameFlow registers each computer (`POST /api/v1/devices/register`), users see and remove their devices (`/api/v1/me/devices`), and each plan has a device limit (Free 2, Pro 3, Business 10, Enterprise 50, changeable in settings). With Worksuite Cloud sign-in, downloads need a registered device.
+- My library: favorites that sync across devices (`/api/v1/me/favorites`, offline favorites merge on sign-in), download history (`/api/v1/me/downloads`) and a server copy of what each device has installed (`/api/v1/me/installs`).
+- Live updates: `GET /api/v1/sync/stream` pushes catalog changes to FrameFlow as Server-Sent Events, resuming from the last event after a reconnect.
+- Optional Meilisearch search (`MEILI_URL`, `MEILI_KEY`): typo-tolerant results with Sinhala and Tamil keywords matched to English tags; without it the built-in search is used. Searches with no results are counted for admins.
+- Curated collections: admins create collections of assets with an optional show/hide window; visible ones appear before Featured, New and Trending.
+- Categories can be renamed, given an icon, hidden, moved under a parent, reordered and deleted when empty; tags can be merged across every asset.
+- Library settings in the admin API: device limits, whether publishing waits for processing, allowed admin origins (CORS) and which visibilities each FrameFlow feed channel lists.
+- Analytics: downloads by type, installs and applies on the overview (with a date range), per-asset stats with downloads by day and by version, and top searches and searches with no results.
+- Webhooks: notify other services when assets are published, updated, unpublished or deprecated, or a version is published. Requests are signed (`X-Library-Signature`), retried up to 3 times and can be tested from the admin API.
+- Admins can view a version's generated previews before it is published.
+- The JS SDK covers devices, favorites, download history, installs and the live update stream.
 - PHP backend (`backend/`, CodeIgniter 4.7 on PHP 8.3): the Library API, FrameFlow feed and processing-worker endpoints with the same behaviour as the Node API, storing the library in PostgreSQL (or SQLite for development) tables and files in a local folder or R2/S3. Existing signing keys keep working, packs install in FrameFlow unchanged, and it ships as an nginx + php-fpm image on port 8080. The test suites can run against it with `LIBRARY_API_URL=php`.
 - New web frontend (`frontend/`, React 19 + TypeScript + Vite + Tailwind CSS v4): the Download Center admin at `/admin` built on Tailwind Plus Application UI (dashboard, asset library with bulk actions, upload center, asset editor with versions and rollback, processing, review queue, categories, audit log, settings), and a public site at `/` built on the Radiant template (home with asset types and collections, library browse and search, asset pages, pricing, sign-in).
 - New web frontend (`frontend/`): the Download Center admin rebuilt on React with every feature of the old admin plus version history with metadata diffs, publishing a specific version, dependencies, a processing view and a Settings page with feed URLs and the signing key; and a public site with the home page, library browsing with search and filters, asset pages and plans.
@@ -23,6 +34,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `packages/sdk-js`: a typed JavaScript client for the client API.
 - Transitions, filters, text templates and video templates are uploaded as JSON presets in the shapes FrameFlow's panels apply, and are checked against what FrameFlow can render. Choosing a type for an upload re-runs its checks for that type.
 
+### Changed
+
+- The CodeIgniter backend is now the Library API: the test suite runs against it by default (`npm test`), and production at library.frameflow.worksuitecloud.com serves the API from the `backend/` image and the new web frontend from the same address.
+- Hosting runs one processing worker on Cloudflare, kept running by a scheduled trigger, so previews and checks happen without a separate server.
+- Production database settings use CodeIgniter's `database.default.*` names.
+
+### Removed
+
+- The Node Library API (`apps/api`), the old admin web (`apps/admin-web`) and the root Docker image they shipped in.
+
 ### Security
 
+- Webhook calls refuse private, loopback and other internal addresses, don't follow redirects and time out after 10 seconds.
 - Pro, Business and Enterprise packs are only served to a signed-in plan that covers them, or through a download grant's signed URL. With sign-in configured, the `X-Plan` header is ignored.

@@ -1,9 +1,18 @@
-// Cloudflare front for the Library API: every request goes to one
-// container instance running the Docker image at the repo root. One
-// instance on purpose: it holds PostgreSQL's writer lock (storage.js).
+// Cloudflare front for library.frameflow.worksuitecloud.com:
+//   /api/*, /feed/*, /previews/*, /healthz → the Library API container (backend/Dockerfile)
+//   everything else                        → the built frontend (Workers static assets, SPA fallback)
+// A cron trigger keeps one processing-worker container (apps/workers) running.
 import { Container, getContainer } from "@cloudflare/containers";
 
-const PASS = [
+// Runtime secrets/vars handed to the API container. Database: CodeIgniter's own names.
+const API_ENV = [
+	"database.default.DBDriver",
+	"database.default.hostname",
+	"database.default.port",
+	"database.default.database",
+	"database.default.username",
+	"database.default.password",
+	"database.default.DSN",
 	"DATABASE_URL",
 	"LIBRARY_SIGNING_KEY",
 	"LIBRARY_ADMIN_TOKENS",
@@ -16,22 +25,63 @@ const PASS = [
 	"LIBRARY_S3_SECRET_ACCESS_KEY",
 	"LIBRARY_S3_REGION",
 	"LIBRARY_S3_PREFIX",
+	"LIBRARY_CORS_ORIGINS",
+	"LIBRARY_REQUIRE_PROCESSING",
+	"MEILI_URL",
+	"MEILI_KEY",
+	"MEILI_INDEX",
+	"CLAMAV_HOST",
 ];
+const WORKER_ENV = ["LIBRARY_WORKER_TOKEN", "WORKER_CONCURRENCY", "WORKER_POLL_MS", "CLAMAV_HOST", "CLAMAV_PORT"];
+const API_PATH = /^\/(api|feed|previews)(\/|$)|^\/healthz$/;
+
+const pick = (env, keys) => Object.fromEntries(keys.filter((k) => env[k] !== undefined && env[k] !== "").map((k) => [k, String(env[k])]));
 
 export class LibraryContainer extends Container {
 	defaultPort = 8080;
-	// Stays up between requests for a while; FrameFlow clients poll every 15 minutes.
-	sleepAfter = "30m";
+	// The cron below wakes it every 5 minutes, so scheduled publishes and webhooks keep running.
+	sleepAfter = "15m";
 	enableInternet = true;
 
 	constructor(ctx, env) {
 		super(ctx, env);
-		this.envVars = Object.fromEntries(PASS.filter((k) => env[k]).map((k) => [k, String(env[k])]));
+		this.envVars = pick(env, API_ENV);
+	}
+}
+
+export class ProcessorContainer extends Container {
+	// No HTTP port: the worker only makes outbound calls to the API.
+	sleepAfter = "15m";
+	enableInternet = true;
+
+	constructor(ctx, env) {
+		super(ctx, env);
+		this.envVars = { LIBRARY_API_URL: env.LIBRARY_PUBLIC_URL, ...pick(env, WORKER_ENV) };
+	}
+
+	/** Starts the worker if it isn't running and pushes its sleep timer out. */
+	async keepAlive() {
+		await this.start();
+		this.renewActivityTimeout();
+		return { running: true };
 	}
 }
 
 export default {
 	async fetch(request, env) {
-		return getContainer(env.LIBRARY).fetch(request);
+		const { pathname } = new URL(request.url);
+		if (API_PATH.test(pathname)) return getContainer(env.LIBRARY).fetch(request);
+		return env.ASSETS.fetch(request);
+	},
+
+	async scheduled(controller, env, ctx) {
+		ctx.waitUntil(
+			Promise.allSettled([
+				env.LIBRARY_WORKER_TOKEN ? getContainer(env.PROCESSOR, "processor").keepAlive() : Promise.resolve(),
+				getContainer(env.LIBRARY).fetch(new Request(`${env.LIBRARY_PUBLIC_URL}/healthz`)),
+			]).then((results) => {
+				for (const r of results) if (r.status === "rejected") console.error("cron:", r.reason);
+			}),
+		);
 	},
 };

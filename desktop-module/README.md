@@ -12,6 +12,7 @@ hot registration) lives in the FrameFlow app itself, in
 | Hot registration with editor panels | `apps/web/src/asset-library/registry.ts` |
 | Library UI | `apps/web/src/asset-library/components/` |
 
-This repository publishes the feed those files read (`apps/api`, `/feed/*`)
+This repository publishes the feed those files read (`backend/`, `/feed/*`)
 and the typed client in `packages/sdk-js` for the richer client API
-(search, entitlements, sync, usage).
+(search, entitlements, sync and the `/sync/stream` push channel, usage,
+device registration, favorites, download history and the installs mirror).

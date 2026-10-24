@@ -1,7 +1,9 @@
-node_modules
+**/node_modules
+**/.git
 data
-.git
 tests
 docs
-deploy/cloudflare/node_modules
+backend/vendor
+backend/writable
+frontend/dist
 *.log

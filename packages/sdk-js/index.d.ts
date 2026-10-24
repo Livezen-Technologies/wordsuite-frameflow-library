@@ -27,6 +27,7 @@ export interface LibraryAsset {
 	pack_type: string;
 	thumbnail_url: string | null;
 	published_at: string | null;
+	preview: Record<string, string>;
 	stats: { downloads: number; installs: number; favorites: number; applies: number };
 }
 
@@ -72,6 +73,40 @@ export interface SyncPage {
 	full_resync_required: boolean;
 }
 
+export interface Device {
+	id: string;
+	name: string;
+	os: "windows" | "macos" | "linux";
+	app_version: string;
+	created_at: string;
+	last_seen_at: string;
+}
+
+export interface DownloadRecord {
+	id: string;
+	asset: LibraryAsset | null;
+	version: string;
+	device_id: string | null;
+	status: "granted" | "installed" | "failed";
+	bytes: number | null;
+	started_at: string;
+	finished_at: string | null;
+}
+
+export interface InstallRecord {
+	device_id: string;
+	asset_id: string;
+	version: string;
+	installed_at: string;
+	last_used_at: string | null;
+}
+
+export interface SyncStream {
+	close(): void;
+	/** The last seq received (reconnects resume after it). */
+	readonly lastSeq: number;
+}
+
 export declare class LibraryError extends Error {
 	status: number;
 	code: string;
@@ -85,13 +120,29 @@ export interface LibraryClient {
 	search(params?: { q?: string; type?: AssetType; category?: string; tags?: string; tier?: Tier; has_alpha?: boolean; sort?: "popular" | "new" | "trending" | "az"; cursor?: string; limit?: number }): Promise<Page<LibraryAsset>>;
 	asset(id: string): Promise<AssetDetail>;
 	suggest(q: string): Promise<Array<{ id: string; title: string; type: AssetType }>>;
-	collections(): Promise<Array<{ slug: string; title: string; assets: LibraryAsset[] }>>;
+	/** Admin collections in their window first, then Featured, New this week and Trending. */
+	collections(): Promise<Array<{ slug: string; title: string; description?: string; assets: LibraryAsset[] }>>;
 	collection(slug: string): Promise<{ slug: string; title: string; assets: LibraryAsset[] }>;
 	requestDownload(id: string, options?: { version?: string }): Promise<DownloadGrant>;
 	completeDownload(downloadId: string, report: { status: "installed" | "failed"; bytes?: number; duration_ms?: number }): Promise<unknown>;
 	reportUsage(events: Array<{ asset_id: string; event: "apply" | "insert" | "preview" }>): Promise<{ accepted: boolean }>;
 	sync(since?: string | number): Promise<SyncPage>;
-	entitlements(): Promise<{ plan: Tier }>;
+	entitlements(): Promise<{ plan: Tier; signed_in: boolean }>;
+	/** 201 with a new device, 200 with the existing one; LibraryError code DEVICE_LIMIT (409) over the plan's limit. */
+	registerDevice(device: { fingerprintHash: string; os: "windows" | "macos" | "linux"; appVersion?: string; name?: string }): Promise<Device>;
+	devices(): Promise<{ data: Device[]; limit: number }>;
+	/** Sends this device id as X-Device-Id from now on. */
+	useDevice(id: string): void;
+	removeDevice(id: string): Promise<null>;
+	favorites(): Promise<LibraryAsset[]>;
+	addFavorite(assetId: string): Promise<null>;
+	removeFavorite(assetId: string): Promise<null>;
+	mergeFavorites(assetIds: string[]): Promise<{ merged: number; failed: string[] }>;
+	downloads(options?: { cursor?: string; limit?: number }): Promise<{ data: DownloadRecord[]; next_cursor: string | null }>;
+	installs(options?: { deviceId?: string }): Promise<InstallRecord[]>;
+	recordInstall(install: { assetId: string; version: string; deviceId?: string }): Promise<InstallRecord>;
+	removeInstall(assetId: string, options?: { deviceId?: string }): Promise<null>;
+	stream(options: { since?: number | string; onEvent: (event: SyncEvent) => void; onError?: (error: unknown) => void; retryMs?: number }): SyncStream;
 	feedBase: string;
 }
 

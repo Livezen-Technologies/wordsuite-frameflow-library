@@ -23,6 +23,9 @@ abstract class BaseApiController extends Controller
     protected LibraryService $lib;
     protected AuthContext $auth;
 
+    /** Status for a successful response when the default (200, 201 on admin creates) doesn't fit. */
+    protected ?int $status = null;
+
     public function _remap(string $method, ...$params)
     {
         $this->lib      = service('library');
@@ -63,7 +66,7 @@ abstract class BaseApiController extends Controller
         if ($out instanceof ResponseInterface) {
             return $out;
         }
-        if ($out === null && $method === 'POST') {
+        if ($out === null && in_array($method, ['POST', 'PUT', 'DELETE'], true)) {
             return $this->response->setStatusCode(204)->setBody('');
         }
         $body = Json::encode(self::objectify($out));
@@ -75,13 +78,13 @@ abstract class BaseApiController extends Controller
             }
         }
         $path    = '/' . trim($this->request->getUri()->getPath(), '/');
-        $created = $method === 'POST' && preg_match('#/admin/(assets|uploads|categories)$#', $path);
+        $created = $method === 'POST' && preg_match('#/admin/(assets|uploads|categories|collections|webhooks)$#', $path);
 
-        return ApiResponse::text($body, $created ? 201 : 200, ['Content-Type' => 'application/json; charset=utf-8'] + ($method === 'GET' ? ['ETag' => $etag] : []));
+        return ApiResponse::text($body, $this->status ?? ($created ? 201 : 200), ['Content-Type' => 'application/json; charset=utf-8'] + ($method === 'GET' ? ['ETag' => $etag] : []));
     }
 
     /** Keys whose value is a JSON object in the Node API even when empty. */
-    private const OBJECT_KEYS = ['meta' => 1, 'previews' => 1, 'preview' => 1, 'detail' => 1, 'downloads_by_day' => 1, 'before' => 1, 'after' => 1, 'stats' => 1, 'diff' => 1];
+    private const OBJECT_KEYS = ['meta' => 1, 'previews' => 1, 'preview' => 1, 'detail' => 1, 'downloads_by_day' => 1, 'downloads_by_type' => 1, 'before' => 1, 'after' => 1, 'stats' => 1, 'diff' => 1, 'device_limits' => 1, 'feed' => 1];
 
     /** PHP can't tell `{}` from `[]`: turns empty arrays under object keys into objects. */
     public static function objectify(mixed $v, ?string $key = null): mixed
