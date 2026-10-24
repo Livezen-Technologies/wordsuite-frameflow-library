@@ -647,6 +647,13 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		return fs.existsSync(p) ? p : null;
 	}
 
+	/** Licence tier of the asset a package zip belongs to (thumbnails are always public). */
+	function packageTier(name) {
+		if (!name.endsWith(".zip")) return "free";
+		for (const a of db.assets) for (const v of a.versions) if (`${packIdOf(a)}-${v.version}.zip` === name) return a.licence_tier;
+		return "free";
+	}
+
 	// ---------- admin read side ----------
 
 	function adminList({ status, type, owner, q, cursor = 0, limit = 50 } = {}) {
@@ -722,6 +729,7 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 		],
 		feed,
 		packageFile,
+		packageTier,
 		verifyDownloadToken: (file, expires, sig) => {
 			try {
 				return new Date(expires) > now() && crypto.verify(null, Buffer.from(`${file}|${expires}`), crypto.createPublicKey(publicKey), Buffer.from(String(sig), "base64"));

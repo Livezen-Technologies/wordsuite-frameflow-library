@@ -9,6 +9,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ValidationError } from "../../../packages/asset-schema/index.js";
+import { createOidcVerifier, planRank } from "./auth.js";
 import { HttpError, createLibrary } from "./service.js";
 
 const ADMIN_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "admin-web");
@@ -95,13 +96,35 @@ function route(routes, method, pathname) {
 	return null;
 }
 
-export function createServer({ dataDir, signingKey = process.env.LIBRARY_SIGNING_KEY || null, tokens = parseTokens(process.env.LIBRARY_ADMIN_TOKENS), now } = {}) {
+/**
+ * `oidc`: { issuer, audience?, roleClaim? } (LIBRARY_OIDC_ISSUER, …_AUDIENCE,
+ * …_ROLE_CLAIM). Without it, dev mode: clients may claim a plan with X-Plan.
+ */
+export function createServer({
+	dataDir,
+	signingKey = process.env.LIBRARY_SIGNING_KEY || null,
+	tokens = parseTokens(process.env.LIBRARY_ADMIN_TOKENS),
+	oidc = process.env.LIBRARY_OIDC_ISSUER ? { issuer: process.env.LIBRARY_OIDC_ISSUER, audience: process.env.LIBRARY_OIDC_AUDIENCE || undefined, roleClaim: process.env.LIBRARY_OIDC_ROLE_CLAIM || undefined } : null,
+	fetch: fetchImpl,
+	now,
+} = {}) {
 	const lib = createLibrary({ dataDir, signingKey, now });
-	const actorOf = (req) => {
+	const verifier = oidc ? createOidcVerifier({ ...oidc, fetch: fetchImpl, now: now ? () => now().getTime() : undefined }) : null;
+	/** Who is calling: a static token's admin, a verified OIDC user, or null. */
+	async function principalOf(req) {
 		const token = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "")?.[1];
-		return token ? (tokens.get(token) ?? null) : null;
-	};
-	const clientOf = (req) => ({ plan: String(req.headers["x-plan"] ?? "free"), device_id: req.headers["x-device-id"] ?? null, appVersion: req.headers["x-app-version"] ?? null });
+		if (!token) return null;
+		const staticActor = tokens.get(token);
+		if (staticActor) return { ...staticActor, plan: "enterprise" };
+		return verifier ? verifier.principal(token).catch(() => null) : null;
+	}
+	const clientOf = (req, who) => ({
+		// Production: the plan comes from the verified token. Dev (no OIDC): X-Plan.
+		plan: who?.plan ?? (verifier ? "free" : String(req.headers["x-plan"] ?? "free")),
+		device_id: who?.device_id ?? req.headers["x-device-id"] ?? null,
+		user_id: who?.id ?? null,
+		appVersion: req.headers["x-app-version"] ?? null,
+	});
 
 	const A = "/api/v1";
 	const routes = [
@@ -109,19 +132,20 @@ export function createServer({ dataDir, signingKey = process.env.LIBRARY_SIGNING
 		["GET", `${A}/catalog/types`, () => ({ data: lib.catalogTypes() })],
 		["GET", `${A}/catalog/categories`, ({ query }) => ({ data: lib.categories(query.get("type")) })],
 		["GET", `${A}/assets`, ({ query, req }) => lib.searchAssets({ ...Object.fromEntries(query), appVersion: clientOf(req).appVersion })],
-		["GET", `${A}/assets/:id`, ({ params, req }) => lib.assetDetail(params.id, clientOf(req))],
+		["GET", `${A}/assets/:id`, ({ params, req, who }) => lib.assetDetail(params.id, clientOf(req, who))],
 		["GET", `${A}/assets/:id/preview`, ({ params }) => ({ thumbnail_url: lib.assetDetail(params.id).thumbnail_url })],
 		["GET", `${A}/search/suggest`, ({ query }) => ({ data: lib.searchAssets({ q: query.get("q") ?? "", limit: 8 }).data.map((a) => ({ id: a.id, title: a.title, type: a.type })) })],
 		["GET", `${A}/collections`, () => ({ data: lib.collections() })],
 		["GET", `${A}/collections/:slug`, ({ params }) => lib.collections().find((c) => c.slug === params.slug) ?? (() => { throw new HttpError(404, "NOT_FOUND", "Collection not found."); })()],
-		["POST", `${A}/assets/:id/download`, async ({ params, req }) => {
+		["POST", `${A}/assets/:id/download`, async ({ params, req, who }) => {
 			const body = await json(req);
-			return lib.downloadGrant(params.id, { ...clientOf(req), ...body, plan: clientOf(req).plan });
+			const c = clientOf(req, who);
+			return lib.downloadGrant(params.id, { ...body, ...c, device_id: c.device_id ?? body.device_id ?? null });
 		}],
 		["POST", `${A}/downloads/:id/complete`, async ({ params, req }) => lib.completeDownload(params.id, await json(req))],
 		["POST", `${A}/me/usage`, async ({ req }) => lib.recordUsage((await json(req)).events)],
 		["GET", `${A}/sync`, ({ query }) => lib.sync(query.get("since"), Number(query.get("limit")) || 500)],
-		["GET", `${A}/entitlements`, ({ req }) => ({ plan: clientOf(req).plan })],
+		["GET", `${A}/entitlements`, ({ req, who }) => ({ plan: clientOf(req, who).plan, signed_in: !!who })],
 		// ---- admin (§7.3)
 		["GET", `${A}/admin/me`, ({ actor }) => (actor ? actor : (() => { throw new HttpError(401, "UNAUTHENTICATED", "Sign in first."); })())],
 		["POST", `${A}/admin/uploads`, async ({ req, actor, query }) => {
@@ -168,6 +192,15 @@ export function createServer({ dataDir, signingKey = process.env.LIBRARY_SIGNING
 				if (feed[3]) {
 					const file = lib.packageFile(feed[3]);
 					if (!file) return send(res, 404, "Not found");
+					// Pro and above: a signed-in plan that covers the tier, or a download grant's signed URL.
+					const tier = lib.packageTier(feed[3]);
+					if (tier !== "free") {
+						const granted = lib.verifyDownloadToken(feed[3], url.searchParams.get("expires"), url.searchParams.get("sig"));
+						const who = granted ? null : await principalOf(req);
+						if (!granted && planRank(clientOf(req, who).plan) < planRank(tier))
+							return send(res, who ? 403 : 401, { error: { code: who ? "NOT_ENTITLED" : "UNAUTHENTICATED", message: `This pack needs a ${tier} plan.`, details: [], request_id: requestId } });
+						return serveFile(req, res, file, { "Cache-Control": "private, no-store" });
+					}
 					return serveFile(req, res, file, { "Cache-Control": "public, max-age=31536000, immutable", "Access-Control-Allow-Origin": "*" });
 				}
 				const f = lib.feed(feed[1]);
@@ -190,10 +223,12 @@ export function createServer({ dataDir, signingKey = process.env.LIBRARY_SIGNING
 			// ---- API
 			const hit = route(routes, req.method, pathname);
 			if (!hit) throw new HttpError(404, "NOT_FOUND", `No route for ${req.method} ${pathname}.`);
-			const actor = actorOf(req);
-			if (ADMIN_READ.test(pathname) && !actor && !pathname.endsWith("/admin/me")) throw new HttpError(401, "UNAUTHENTICATED", "Sign in first.");
+			const who = await principalOf(req);
+			// Admin endpoints need a library role (static token or the OIDC role claim).
+			const actor = who?.role ? who : null;
+			if (ADMIN_READ.test(pathname) && !actor) throw new HttpError(who ? 403 : 401, who ? "FORBIDDEN" : "UNAUTHENTICATED", who ? "Your account has no Download Center role." : "Sign in first.");
 			lib.runSchedule();
-			const out = await hit.handler({ req, params: hit.params, query: url.searchParams, actor });
+			const out = await hit.handler({ req, params: hit.params, query: url.searchParams, actor, who });
 			const body = JSON.stringify(out);
 			if (req.method === "GET") {
 				const etag = `"${crypto.createHash("sha256").update(body).digest("hex").slice(0, 27)}"`;

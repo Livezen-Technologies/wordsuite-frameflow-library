@@ -164,7 +164,9 @@ test("workflow: upload → draft → review → approve → publish → feed →
 	assert.equal((await call("GET", "/feed/stable/catalog.json", { headers: { "If-None-Match": cat.headers.get("etag") } })).status, 304);
 
 	// Range download of the pack.
-	const ranged = await fetch(`${s.base}/feed/stable/${cat.data.packs[0].files}`, { headers: { Range: "bytes=10-" } });
+	// Pro pack: signed out is refused; a Pro plan (X-Plan in dev mode) gets it.
+	assert.equal((await fetch(`${s.base}/feed/stable/${cat.data.packs[0].files}`)).status, 401);
+	const ranged = await fetch(`${s.base}/feed/stable/${cat.data.packs[0].files}`, { headers: { Range: "bytes=10-", "X-Plan": "pro" } });
 	assert.equal(ranged.status, 206);
 	assert.equal((await ranged.arrayBuffer()).byteLength, cat.data.packs[0].sizeBytes - 10);
 
@@ -274,4 +276,48 @@ test("JS SDK talks to the API", async (t) => {
 	assert.equal((await fetch(grant.url)).status, 200);
 	assert.equal((await client.sync()).events.length, 1);
 	await assert.rejects(client.asset("nope"), (e) => e.status === 404 && e.code === "NOT_FOUND");
+});
+
+test("OIDC: verified tokens carry plan and admin role; Pro packs need the plan", async (t) => {
+	const crypto = await import("node:crypto");
+	const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+	const jwk = { ...publicKey.export({ format: "jwk" }), kid: "k1", alg: "RS256", use: "sig" };
+	const issuer = "https://accounts.test";
+	const fakeFetch = async (u) => new Response(JSON.stringify(String(u).endsWith("openid-configuration") ? { jwks_uri: `${issuer}/jwks` } : { keys: [jwk] }));
+	const jwt = (claims, key = privateKey) => {
+		const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+		const head = `${enc({ alg: "RS256", kid: "k1", typ: "JWT" })}.${enc({ iss: issuer, aud: "frameflow-library", exp: Math.floor(Date.now() / 1000) + 600, ...claims })}`;
+		return `${head}.${crypto.sign("sha256", Buffer.from(head), key).toString("base64url")}`;
+	};
+	const { server } = createServer({ dataDir: tmp(), tokens: new Map(), oidc: { issuer }, fetch: fakeFetch });
+	await new Promise((r) => server.listen(0, r));
+	t.after(() => server.close());
+	const base = `http://127.0.0.1:${server.address().port}`;
+	const as = (token, p, init = {}) => fetch(base + p, { ...init, headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) } });
+
+	const admin = jwt({ sub: "u-admin", library_roles: ["super_admin"], plan: "enterprise" });
+	const user = jwt({ sub: "u-free", plan: "free" });
+	const pro = jwt({ sub: "u-pro", plan: "pro" });
+	const forged = jwt({ sub: "u-x", library_roles: ["super_admin"] }, crypto.generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey);
+	const expired = jwt({ sub: "u-admin", library_roles: ["super_admin"], exp: 1 });
+
+	assert.equal((await as(user, "/api/v1/admin/assets")).status, 403);
+	assert.equal((await as(forged, "/api/v1/admin/assets")).status, 401);
+	assert.equal((await as(expired, "/api/v1/admin/assets")).status, 401);
+	assert.equal((await as(admin, "/api/v1/admin/me")).status, 200);
+
+	const up = await (await as(admin, "/api/v1/admin/uploads", { method: "POST", body: cube(17), headers: { "X-Filename": "w.cube" } })).json();
+	const thumb = await (await as(admin, "/api/v1/admin/uploads", { method: "POST", body: png(640, 360), headers: { "X-Filename": "t.png" } })).json();
+	const a = await (await as(admin, "/api/v1/admin/assets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ upload_id: up.id, thumbnail_upload_id: thumb.id, title: "Pro Warm", licence_tier: "pro" }) })).json();
+	assert.equal((await as(admin, `/api/v1/admin/assets/${a.id}/publish`, { method: "POST" })).status, 200);
+
+	const zip = (await (await fetch(`${base}/feed/stable/catalog.json`)).json()).packs[0].files;
+	// X-Plan is ignored once OIDC is configured.
+	assert.equal((await fetch(`${base}/feed/stable/${zip}`, { headers: { "X-Plan": "pro" } })).status, 401);
+	assert.equal((await as(user, `/feed/stable/${zip}`)).status, 403);
+	assert.equal((await as(pro, `/feed/stable/${zip}`)).status, 200);
+	// A grant's signed URL works without the token (e.g. handed to a download manager).
+	const grant = await (await as(pro, `/api/v1/assets/${a.id}/download`, { method: "POST" })).json();
+	assert.equal((await fetch(base + grant.url)).status, 200);
+	assert.equal((await as(user, `/api/v1/assets/${a.id}/download`, { method: "POST" })).status, 403);
 });
