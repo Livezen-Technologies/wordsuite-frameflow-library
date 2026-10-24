@@ -1,0 +1,261 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import zlib from "node:zlib";
+import { parseCube, svgProblems, lottieInfo, detectType, uploadChecks, publishProblems, tagsByScript } from "../packages/asset-schema/index.js";
+import { createServer, parseTokens } from "../apps/api/src/server.js";
+import { createZip, inspectZip, verify } from "../apps/api/src/pack.js";
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "fflib-"));
+
+// ---------- fixtures ----------
+
+function cube(size = 17) {
+	const rows = [];
+	for (let b = 0; b < size; b++) for (let g = 0; g < size; g++) for (let r = 0; r < size; r++) rows.push(`${(r / (size - 1)).toFixed(4)} ${(g / (size - 1)).toFixed(4)} ${(b / (size - 1)).toFixed(4)}`);
+	return `TITLE "Test"\nLUT_3D_SIZE ${size}\n${rows.join("\n")}\n`;
+}
+
+function png(w, h) {
+	const chunk = (type, data) => {
+		const len = Buffer.alloc(4);
+		len.writeUInt32BE(data.length);
+		const body = Buffer.concat([Buffer.from(type), data]);
+		const crc = Buffer.alloc(4);
+		crc.writeUInt32BE(zlib.crc32 ? zlib.crc32(body) : 0);
+		return Buffer.concat([len, body, crc]);
+	};
+	const ihdr = Buffer.alloc(13);
+	ihdr.writeUInt32BE(w, 0);
+	ihdr.writeUInt32BE(h, 4);
+	ihdr[8] = 8;
+	ihdr[9] = 6;
+	const raw = Buffer.alloc((w * 4 + 1) * h);
+	return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+const lottie = { v: "5.7.4", fr: 30, ip: 0, op: 60, w: 512, h: 512, layers: [{ ty: 4, nm: "shape" }, { ty: 5, nm: "Title" }], assets: [] };
+
+// ---------- schema ----------
+
+test("LUT validation: size, rows and range", () => {
+	assert.equal(parseCube(cube(17)).lut_size, 17);
+	assert.throws(() => parseCube("LUT_3D_SIZE 32\n"), (e) => e.details[0].rule === "lut.size" && e.details[0].value === 32 && e.message === "LUT size must be 17, 33 or 65.");
+	assert.throws(() => parseCube(cube(17).replace("1.0000 1.0000 1.0000", "1.5 1 1")), (e) => e.details[0].rule === "lut.range");
+});
+
+test("SVG and Lottie safety", () => {
+	assert.deepEqual(svgProblems('<svg><rect fill="#fff"/></svg>'), []);
+	const rules = svgProblems('<svg onload="x()"><script>1</script><image href="https://x/y.png"/><foreignObject/></svg>').map((p) => p.rule);
+	assert.deepEqual(rules.sort(), ["svg.event_handler", "svg.external_ref", "svg.foreignObject", "svg.script"]);
+	assert.equal(lottieInfo(lottie).duration_ms, 2000);
+	assert.throws(() => lottieInfo({ ...lottie, layers: [{ ks: { p: { x: "time*2" } } }] }), (e) => e.details[0].rule === "lottie.expressions");
+	assert.throws(() => lottieInfo({ ...lottie, assets: [{ id: "i", p: "img.png", u: "images/" }] }), (e) => e.details[0].rule === "lottie.external_image");
+	assert.throws(() => lottieInfo({ ...lottie, op: 900 }), (e) => e.details[0].rule === "lottie.frames");
+});
+
+test("upload gate: extension, magic bytes, type detection", () => {
+	assert.equal(detectType("a.cube", Buffer.from(cube())), "lut");
+	assert.equal(detectType("a.json", Buffer.from(JSON.stringify(lottie))), "lottie");
+	const bad = uploadChecks({ filename: "fake.png", type: "graphic", buf: Buffer.from("not a png") });
+	assert.equal(bad.find((c) => c.check === "magic_bytes").passed, false);
+	assert.ok(uploadChecks({ filename: "a.png", type: "graphic", buf: png(600, 600) }).every((c) => c.passed));
+});
+
+test("zip guard rejects traversal and zip bombs", () => {
+	const zip = createZip([{ name: "ok/a.txt", data: "x" }]);
+	assert.deepEqual(inspectZip(zip), ["ok/a.txt"]);
+	const evil = Buffer.from(zip);
+	const at = evil.indexOf("ok/a.txt", evil.length - 40);
+	evil.write("../a.txt", at);
+	assert.throws(() => inspectZip(evil), (e) => e.rule === "zip.path");
+	assert.throws(() => inspectZip(createZip([{ name: "big", data: Buffer.alloc(5_000_000) }])), (e) => e.rule === "zip.ratio");
+});
+
+test("tags split by script for FrameFlow search", () => {
+	assert.deepEqual(tagsByScript(["warm", "උණුසුම්", "சூடான"]), { en: ["warm"], si: ["උණුසුම්"], ta: ["சூடான"] });
+});
+
+test("publish gate lists every blocker", () => {
+	const rules = publishProblems({ status: "draft", visibility: "internal", versions: [{ version: "1.0.0", checks: [{ passed: false }] }], current_version: "1.0.0" }).map((p) => p.rule);
+	for (const r of ["status.approved", "thumbnail.required", "category.required", "min_app_version.required", "licence.complete", "checks.passed", "audience.rule"]) assert.ok(rules.includes(r), r);
+});
+
+// ---------- API ----------
+
+async function start() {
+	const dataDir = tmp();
+	const { server, lib } = createServer({ dataDir, tokens: parseTokens("su:super_admin:u1,ed:content_editor:u2,rv:reviewer:u3,mg:library_manager:u4") });
+	await new Promise((r) => server.listen(0, r));
+	const base = `http://127.0.0.1:${server.address().port}`;
+	const call = async (method, p, { token, body, raw, headers = {} } = {}) => {
+		const res = await fetch(base + p, {
+			method,
+			headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { "Content-Type": "application/json" } : {}), ...headers },
+			body: raw ?? (body ? JSON.stringify(body) : undefined),
+		});
+		const text = await res.text();
+		let data = text;
+		try {
+			data = JSON.parse(text);
+		} catch {}
+		return { status: res.status, data, headers: res.headers };
+	};
+	const upload = (token, filename, buf) => call("POST", "/api/v1/admin/uploads", { token, raw: buf, headers: { "X-Filename": encodeURIComponent(filename) } });
+	return { server, lib, base, call, upload, dataDir };
+}
+
+test("workflow: upload → draft → review → approve → publish → feed → sync, with RBAC and audit", async (t) => {
+	const s = await start();
+	t.after(() => s.server.close());
+	const { call, upload } = s;
+
+	assert.equal((await call("GET", "/api/v1/admin/assets")).status, 401);
+	const up = await upload("ed", "kandy_golden_hour.cube", Buffer.from(cube(17)));
+	assert.equal(up.status, 201);
+	assert.equal(up.data.type, "lut");
+	assert.ok(up.data.checks.every((c) => c.passed), JSON.stringify(up.data.checks));
+	const thumb = await upload("ed", "thumb.png", png(640, 360));
+	const created = await call("POST", "/api/v1/admin/assets", { token: "ed", body: { upload_id: up.data.id, thumbnail_upload_id: thumb.data.id, title: "Kandy Golden Hour", tags: ["Warm", "sunset", "warm"], keywords: ["උණුසුම්"], licence_tier: "pro" } });
+	assert.equal(created.status, 201, JSON.stringify(created.data));
+	const id = created.data.id;
+	assert.equal(created.data.slug, "kandy-golden-hour");
+	assert.deepEqual(created.data.tags, ["warm", "sunset"]);
+	assert.equal(created.data.meta.lut_size, 17);
+
+	// The editor can't publish; publishing before approval is blocked with the exact rule.
+	assert.equal((await call("POST", `/api/v1/admin/assets/${id}/publish`, { token: "ed" })).status, 403);
+	const blocked = await call("POST", `/api/v1/admin/assets/${id}/publish`, { token: "mg" });
+	assert.equal(blocked.status, 422);
+	assert.equal(blocked.data.error.code, "PUBLISH_BLOCKED");
+	assert.equal(blocked.data.error.details[0].rule, "status.approved");
+
+	assert.equal((await call("POST", `/api/v1/admin/assets/${id}/submit-review`, { token: "ed" })).data.status, "ready_for_review");
+	assert.equal((await call("POST", `/api/v1/admin/assets/${id}/reject`, { token: "rv", body: {} })).status, 422);
+	assert.equal((await call("POST", `/api/v1/admin/assets/${id}/approve`, { token: "rv" })).data.status, "approved");
+	const pub = await call("POST", `/api/v1/admin/assets/${id}/publish`, { token: "mg" });
+	assert.equal(pub.status, 200, JSON.stringify(pub.data));
+	assert.equal(pub.data.status, "published");
+
+	// Feed: signed, FrameFlow schema.
+	const cat = await call("GET", "/feed/stable/catalog.json");
+	const sig = await call("GET", "/feed/stable/catalog.json.sig");
+	const key = await call("GET", "/feed/public-key.pem");
+	const text = await (await fetch(`${s.base}/feed/stable/catalog.json`)).text();
+	assert.ok(verify(text, sig.data, key.data));
+	assert.equal(cat.data.schema, 1);
+	assert.equal(cat.data.packs[0].id, "kandy-golden-hour");
+	assert.equal(cat.data.packs[0].type, "luts");
+	assert.equal(cat.data.packs[0].plan, "pro");
+	assert.deepEqual(cat.data.packs[0].tags.si, ["උණුසුම්"]);
+	assert.equal((await call("GET", "/feed/stable/catalog.json", { headers: { "If-None-Match": cat.headers.get("etag") } })).status, 304);
+
+	// Range download of the pack.
+	const ranged = await fetch(`${s.base}/feed/stable/${cat.data.packs[0].files}`, { headers: { Range: "bytes=10-" } });
+	assert.equal(ranged.status, 206);
+	assert.equal((await ranged.arrayBuffer()).byteLength, cat.data.packs[0].sizeBytes - 10);
+
+	// Client API: search, entitlement, download grant.
+	const found = await call("GET", "/api/v1/assets?q=kandy");
+	assert.equal(found.data.total, 1);
+	assert.equal((await call("GET", "/api/v1/assets?q=glitch")).data.total, 0);
+	assert.equal((await call("POST", `/api/v1/assets/${id}/download`, { body: {} })).status, 403);
+	const grant = await call("POST", `/api/v1/assets/${id}/download`, { body: { device_id: "dev1" }, headers: { "X-Plan": "pro" } });
+	assert.equal(grant.data.sha256, cat.data.packs[0].sha256);
+	assert.equal((await call("POST", `/api/v1/downloads/${grant.data.download_id}/complete`, { body: { status: "installed" } })).data.status, "installed");
+
+	// New version, sync delta, unpublish.
+	const up2 = await upload("ed", "kandy_v2.cube", Buffer.from(cube(33)));
+	const v2 = await call("POST", `/api/v1/admin/assets/${id}/versions`, { token: "ed", body: { upload_id: up2.data.id, changelog: "33³" } });
+	assert.equal(v2.data.current_version, "1.1.0");
+	assert.equal((await call("POST", `/api/v1/admin/assets/${id}/publish`, { token: "mg" })).data.published_version, "1.1.0");
+	const sync = await call("GET", "/api/v1/sync?since=0");
+	assert.deepEqual(sync.data.events.map((e) => [e.op, e.version, e.update_available]), [["upsert", "1.0.0", false], ["upsert", "1.1.0", true]]);
+	assert.equal((await call("POST", `/api/v1/admin/assets/${id}/versions/1.0.0/rollback`, { token: "mg" })).data.published_version, "1.0.0");
+	assert.equal((await call("POST", `/api/v1/admin/assets/${id}/unpublish`, { token: "mg", body: { reason: "licence_expired" } })).data.status, "draft");
+	assert.equal((await call("GET", "/feed/stable/catalog.json")).data.packs.length, 0);
+	assert.equal((await call("GET", `/api/v1/sync?since=${sync.data.next_cursor}`)).data.events.at(-1).op, "unpublish");
+
+	// Every mutation is in the audit log with before/after.
+	const log = (await call("GET", `/api/v1/admin/audit-log?entity_id=${id}`, { token: "su" })).data.data;
+	assert.deepEqual(new Set(log.map((e) => e.action)), new Set(["asset.create", "asset.submit_review", "asset.approve", "asset.publish", "version.create", "version.rollback", "asset.unpublish"]));
+	assert.deepEqual(log.find((e) => e.action === "asset.approve").diff, { before: { status: "ready_for_review" }, after: { status: "approved", review: log.find((e) => e.action === "asset.approve").diff.after.review } });
+});
+
+test("validation failures are blocking and explain the rule", async (t) => {
+	const s = await start();
+	t.after(() => s.server.close());
+	const up = await s.upload("su", "bad.cube", Buffer.from("LUT_3D_SIZE 32\n"));
+	const failed = up.data.checks.find((c) => !c.passed);
+	assert.equal(failed.detail.rule, "lut.size");
+	assert.equal(failed.detail.value, 32);
+	const created = await s.call("POST", "/api/v1/admin/assets", { token: "su", body: { upload_id: up.data.id, title: "Bad LUT" } });
+	assert.equal(created.data.status, "failed");
+	const res = await s.call("POST", `/api/v1/admin/assets/${created.data.id}/publish`, { token: "su" });
+	assert.ok(res.data.error.details.some((d) => d.rule === "checks.passed"));
+});
+
+// ---------- end to end with the FrameFlow desktop asset store ----------
+
+const FRAMEFLOW = process.env.FRAMEFLOW_DIR || path.resolve(import.meta.dirname, "..", "..", "worksuite-frameflow");
+const storeFile = path.join(FRAMEFLOW, "electron", "asset-store.js");
+
+test("FrameFlow installs a published Lottie and LUT from this server", { skip: !fs.existsSync(storeFile) && "worksuite-frameflow checkout not found (set FRAMEFLOW_DIR)" }, async (t) => {
+	const s = await start();
+	t.after(() => s.server.close());
+	const publishOne = async (filename, buf, body) => {
+		const up = await s.upload("su", filename, buf);
+		const thumb = await s.upload("su", `${filename}.png`, png(640, 360));
+		const a = await s.call("POST", "/api/v1/admin/assets", { token: "su", body: { upload_id: up.data.id, thumbnail_upload_id: thumb.data.id, ...body } });
+		const p = await s.call("POST", `/api/v1/admin/assets/${a.data.id}/publish`, { token: "su" });
+		assert.equal(p.data.status, "published", JSON.stringify(p.data));
+		return a.data;
+	};
+	await publishOne("like_burst.json", Buffer.from(JSON.stringify(lottie)), { title: "Like Burst", tags: ["like"] });
+	await publishOne("warm.cube", Buffer.from(cube(17)), { title: "Warm Film" });
+	await publishOne("leak.png", png(1024, 576), { title: "Light Leak Overlay" });
+
+	const require = createRequire(import.meta.url);
+	const { createAssetStore } = require(storeFile);
+	const publicKey = (await s.call("GET", "/feed/public-key.pem")).data;
+	const root = tmp();
+	const store = createAssetStore({ root, assetBase: `${s.base}/feed`, publicKey, appVersion: "9.9.9" });
+	const state = await store.refreshCatalog();
+	assert.equal(state.catalogStatus.state, "ready", state.catalogStatus.error);
+	assert.deepEqual(state.catalog.packs.map((p) => [p.id, p.type]), [["light-leak-overlay", "graphics"], ["like-burst", "motion"], ["warm-film", "luts"]]);
+	await store.install("like-burst");
+	await store.install("warm-film");
+	await store.install("light-leak-overlay");
+	assert.equal(store.getState().installed["light-leak-overlay"].type, "graphics");
+	const installed = store.getState().installed;
+	assert.equal(installed["like-burst"].version, "1.0.0");
+	// The Lottie lands where FrameFlow's Animations library looks: <path>/<id>.json + thumbnail.png.
+	const motionIndex = JSON.parse(fs.readFileSync(path.join(root, "like-burst", "1.0.0", "index.json"), "utf8"));
+	assert.equal(motionIndex.assets[0].path, "like-burst");
+	assert.ok(fs.existsSync(path.join(root, "like-burst", "1.0.0", "like-burst", "like-burst.json")));
+	assert.ok(fs.existsSync(path.join(root, "like-burst", "1.0.0", "like-burst", "thumbnail.png")));
+	const lutIndex = JSON.parse(fs.readFileSync(path.join(root, "warm-film", "1.0.0", "index.json"), "utf8"));
+	assert.equal(lutIndex.items[0].lut_size, 17);
+	assert.ok(fs.existsSync(path.join(root, "warm-film", "1.0.0", lutIndex.items[0].file)));
+});
+
+test("JS SDK talks to the API", async (t) => {
+	const { createLibraryClient } = await import("../packages/sdk-js/index.js");
+	const s = await start();
+	t.after(() => s.server.close());
+	const up = await s.upload("su", "warm.cube", Buffer.from(cube(17)));
+	const thumb = await s.upload("su", "t.png", png(640, 360));
+	const a = (await s.call("POST", "/api/v1/admin/assets", { token: "su", body: { upload_id: up.data.id, thumbnail_upload_id: thumb.data.id, title: "Warm Film" } })).data;
+	await s.call("POST", `/api/v1/admin/assets/${a.id}/publish`, { token: "su" });
+	const client = createLibraryClient({ baseUrl: s.base, appVersion: "2.0.0", deviceId: "d1" });
+	assert.equal((await client.types()).find((x) => x.key === "lut").count, 1);
+	assert.equal((await client.search({ q: "warm" })).data[0].pack_id, "warm-film");
+	const grant = await client.requestDownload(a.id);
+	assert.ok(grant.url.startsWith(s.base));
+	assert.equal((await fetch(grant.url)).status, 200);
+	assert.equal((await client.sync()).events.length, 1);
+	await assert.rejects(client.asset("nope"), (e) => e.status === 404 && e.code === "NOT_FOUND");
+});

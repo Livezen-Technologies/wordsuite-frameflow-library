@@ -1,0 +1,20 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: Livezen-Technologies/worksuite-frameflow
+          path: worksuite-frameflow
+        continue-on-error: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+        env:
+          FRAMEFLOW_DIR: ${{ github.workspace }}/worksuite-frameflow
