@@ -10,7 +10,8 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "i18n": "node scripts/i18n-extract.mjs"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.10",

@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState, type
 import { Transition } from '@headlessui/react';
 import { CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline';
 import { XMarkIcon } from '@heroicons/react/20/solid';
+import { t } from '@/i18n';
 
 interface Note {
   id: number;
@@ -52,7 +53,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
                     </div>
                     <div className="ml-4 flex shrink-0">
                       <button type="button" onClick={() => dismiss(n.id)} className="inline-flex rounded-md text-gray-400 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600 dark:hover:text-white dark:focus:outline-indigo-500">
-                        <span className="sr-only">Close</span>
+                        <span className="sr-only">{t('Close')}</span>
                         <XMarkIcon aria-hidden="true" className="size-5" />
                       </button>
                     </div>

@@ -2,16 +2,38 @@
 
 /* Dark mode follows the OS (Tailwind Plus Application UI ships dark: variants on every component). */
 
+/* Sinhala and Tamil: Noto Sans Sinhala / Noto Sans Tamil, self-hosted from @fontsource (public/fonts, SIL OFL).
+   unicode-range keeps them from loading until a page has Sinhala or Tamil text; ZWJ/ZWNJ are included so
+   conjuncts such as ශ්‍රී (sha + al-lakuna + ZWJ + rakaransaya) shape inside one font run. */
+@font-face { font-family: 'Noto Sans Sinhala'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/noto-sans-sinhala-sinhala-400-normal.woff2') format('woff2'); unicode-range: U+0D80-0DFF, U+111E1-111F4, U+200C-200D, U+25CC; }
+@font-face { font-family: 'Noto Sans Sinhala'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/noto-sans-sinhala-sinhala-500-normal.woff2') format('woff2'); unicode-range: U+0D80-0DFF, U+111E1-111F4, U+200C-200D, U+25CC; }
+@font-face { font-family: 'Noto Sans Sinhala'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/noto-sans-sinhala-sinhala-600-normal.woff2') format('woff2'); unicode-range: U+0D80-0DFF, U+111E1-111F4, U+200C-200D, U+25CC; }
+@font-face { font-family: 'Noto Sans Sinhala'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/noto-sans-sinhala-sinhala-700-normal.woff2') format('woff2'); unicode-range: U+0D80-0DFF, U+111E1-111F4, U+200C-200D, U+25CC; }
+@font-face { font-family: 'Noto Sans Tamil'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/noto-sans-tamil-tamil-400-normal.woff2') format('woff2'); unicode-range: U+0B80-0BFF, U+11FC0-11FFF, U+200C-200D, U+25CC; }
+@font-face { font-family: 'Noto Sans Tamil'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/noto-sans-tamil-tamil-500-normal.woff2') format('woff2'); unicode-range: U+0B80-0BFF, U+11FC0-11FFF, U+200C-200D, U+25CC; }
+@font-face { font-family: 'Noto Sans Tamil'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/noto-sans-tamil-tamil-600-normal.woff2') format('woff2'); unicode-range: U+0B80-0BFF, U+11FC0-11FFF, U+200C-200D, U+25CC; }
+@font-face { font-family: 'Noto Sans Tamil'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/noto-sans-tamil-tamil-700-normal.woff2') format('woff2'); unicode-range: U+0B80-0BFF, U+11FC0-11FFF, U+200C-200D, U+25CC; }
+
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans Sinhala', 'Noto Sans Tamil', sans-serif;
   /* Radiant (public site) tokens. Only used through the `.radiant` scope and radiant-* utilities below. */
-  --font-switzer: Switzer, ui-sans-serif, system-ui, sans-serif;
+  --font-switzer: Switzer, ui-sans-serif, system-ui, 'Noto Sans Sinhala', 'Noto Sans Tamil', sans-serif;
   --radius-4xl: 2rem;
 }
 
 @layer base {
   :focus-visible {
     outline-color: var(--color-indigo-600);
+  }
+  /* Sinhala and Tamil glyphs are taller and wider than Latin: let them breathe, and don't track display text tight. */
+  :lang(si),
+  :lang(ta) {
+    line-height: 1.6;
+  }
+  :lang(si) :is(h1, h2, h3, .font-display),
+  :lang(ta) :is(h1, h2, h3, .font-display) {
+    letter-spacing: 0;
+    line-height: 1.25;
   }
 }
 
@@ -45,4 +67,47 @@
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---- Public site (FrameFlow Library mockup, Radiant look) ----
+   Inter Tight self-hosted from @fontsource (public/fonts, SIL OFL); Sinhala / Tamil fall through to Noto. */
+@font-face { font-family: 'Inter Tight'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-tight-latin-400-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Inter Tight'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-tight-latin-500-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Inter Tight'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-tight-latin-600-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Inter Tight'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/inter-tight-latin-700-normal.woff2') format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+
+@layer components {
+.site {
+  font-family: 'Inter Tight', Switzer, system-ui, 'Noto Sans Sinhala', 'Noto Sans Tamil', sans-serif;
+  color-scheme: light;
+  background: #fff;
+  color: #030712;
+}
+.site h1, .site h2, .site h3 { text-wrap: balance; }
+.site :focus-visible { outline: 2px solid #b060ff; outline-offset: 2px; }
+.site .gut { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.site .grad { background: linear-gradient(115deg, #fff1be 28%, #ee87cb 70%, #b060ff); }
+.site .grad-soft { background: linear-gradient(145deg, #fff8e1 10%, #fbd3ea 60%, #e3ccff); }
+.site .eyebrow { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #6b7280; }
+.site .btn { display: inline-flex; align-items: center; justify-content: center; gap: .4rem; border-radius: 9999px; padding: .5rem 1.1rem; font-weight: 500; white-space: nowrap; }
+.site .btn:disabled { opacity: .5; cursor: not-allowed; }
+.site .btn-p { background: #030712; color: #fff; box-shadow: 0 4px 10px -2px rgba(0,0,0,.25); }
+.site .btn-p:hover { background: #1f2937; }
+.site .btn-s { background: rgba(255,255,255,.35); color: #030712; box-shadow: 0 4px 10px -4px rgba(0,0,0,.2), inset 0 0 2px 1px #ffffff80; outline: 1px solid rgba(209,80,82,.15); }
+.site .btn-o { border-radius: .6rem; padding: .35rem .7rem; font-size: .875rem; box-shadow: 0 0 0 1px rgba(0,0,0,.1); background: #fff; }
+.site .btn-o:hover { background: #f9fafb; }
+.site .card { border-radius: 2rem; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 0 0 1px rgba(0,0,0,.06); overflow: hidden; }
+.site .thumb { background: linear-gradient(135deg, var(--a), var(--b)); }
+.site .wave { background: repeating-linear-gradient(90deg, #030712 0 2px, transparent 2px 5px); opacity: .55; mask: linear-gradient(0deg, transparent 15%, #000 35%, #000 65%, transparent 85%); }
+.site .field { border-radius: .5rem; padding: .5rem .75rem; box-shadow: 0 0 0 1px rgba(0,0,0,.1); background: #fff; }
+@media (prefers-reduced-motion: no-preference) {
+  .site .lift { transition: transform .2s; }
+  .site .lift:hover { transform: translateY(-3px); }
+}
+}
+
+/* Tamil and Sinhala words are long: scale display headings down on phones. */
+@media (max-width: 640px) {
+  :lang(ta) .site h1, :lang(si) .site h1 { font-size: 2.25rem; line-height: 1.2; }
+  :lang(ta) .site h2, :lang(si) .site h2 { font-size: 1.75rem; line-height: 1.25; }
 }

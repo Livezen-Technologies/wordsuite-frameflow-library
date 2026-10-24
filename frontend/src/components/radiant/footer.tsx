@@ -7,22 +7,23 @@ import { Gradient } from './gradient';
 import { Link } from './link';
 import { Logo } from './logo';
 import { Subheading } from './text';
+import { t } from '@/i18n';
 
 function CallToAction() {
   return (
     <div className="relative pt-20 pb-16 text-center sm:py-24">
       <hgroup>
-        <Subheading>Get started</Subheading>
+        <Subheading>{t('Get started')}</Subheading>
         <p className="mt-6 text-3xl font-medium tracking-tight text-gray-950 sm:text-5xl">
-          Ready to edit?
+          {t('Ready to edit?')}
           <br />
-          Get FrameFlow and open the Library.
+          {t('Get FrameFlow and open the Library.')}
         </p>
       </hgroup>
-      <p className="mx-auto mt-6 max-w-xs text-sm/6 text-gray-500">Every asset installs straight into the panel it belongs to — no restart, no unzipping.</p>
+      <p className="mx-auto mt-6 max-w-xs text-sm/6 text-gray-500">{t('Every asset installs straight into the panel it belongs to — no restart, no unzipping.')}</p>
       <div className="mt-6">
         <Button className="w-full sm:w-auto" href={config.frameflowDownloadUrl}>
-          Get FrameFlow
+          {t('Get FrameFlow')}
         </Button>
       </div>
     </div>
@@ -49,31 +50,32 @@ function Sitemap() {
   return (
     <>
       <div>
-        <SitemapHeading>Library</SitemapHeading>
+        <SitemapHeading>{t('Library')}</SitemapHeading>
         <SitemapLinks>
-          <SitemapLink href="/library">Browse assets</SitemapLink>
-          <SitemapLink href="/library?sort=new">New this week</SitemapLink>
-          <SitemapLink href="/library?sort=trending">Trending</SitemapLink>
+          <SitemapLink href="/library">{t('Browse assets')}</SitemapLink>
+          <SitemapLink href="/library?sort=new">{t('New this week')}</SitemapLink>
+          <SitemapLink href="/library?sort=trending">{t('Trending')}</SitemapLink>
         </SitemapLinks>
       </div>
       <div>
-        <SitemapHeading>Plans</SitemapHeading>
+        <SitemapHeading>{t('Plans')}</SitemapHeading>
         <SitemapLinks>
-          <SitemapLink href="/pricing">Pricing</SitemapLink>
-          <SitemapLink href="/pricing#faqs">FAQ</SitemapLink>
+          <SitemapLink href="/pricing">{t('Pricing')}</SitemapLink>
+          <SitemapLink href="/pricing#faqs">{t('FAQ')}</SitemapLink>
         </SitemapLinks>
       </div>
       <div>
         <SitemapHeading>FrameFlow</SitemapHeading>
         <SitemapLinks>
-          <SitemapLink href={config.frameflowDownloadUrl}>Download the app</SitemapLink>
-          <SitemapLink href="/feed/stable/catalog.json">Asset feed</SitemapLink>
+          <SitemapLink href={config.frameflowDownloadUrl}>{t('Download the app')}</SitemapLink>
+          <SitemapLink href="/feed/stable/catalog.json">{t('Asset feed')}</SitemapLink>
         </SitemapLinks>
       </div>
       <div>
-        <SitemapHeading>Creators</SitemapHeading>
+        <SitemapHeading>{t('Creators')}</SitemapHeading>
         <SitemapLinks>
-          <SitemapLink href="/login">Download Center sign in</SitemapLink>
+          <SitemapLink href="/account/favorites">{t('My library')}</SitemapLink>
+          <SitemapLink href="/login">{t('Download Center sign in')}</SitemapLink>
         </SitemapLinks>
       </div>
     </>
@@ -81,7 +83,7 @@ function Sitemap() {
 }
 
 function Copyright() {
-  return <div className="text-sm/6 text-gray-950">&copy; {new Date().getFullYear()} Livezen Technologies. FrameFlow is a Livezen product.</div>;
+  return <div className="text-sm/6 text-gray-950">&copy; {new Date().getFullYear()} {t('Livezen Technologies. FrameFlow is a Livezen product.')}</div>;
 }
 
 export function Footer() {

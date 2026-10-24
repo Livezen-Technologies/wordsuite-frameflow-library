@@ -6,6 +6,8 @@ import { Link } from './link';
 import { Subheading } from './text';
 import { typeColor, typeName } from '@/core/schema';
 import type { PublicAsset } from '@/types/api';
+import { FavoriteButton } from './favorite-button';
+import { t } from '@/i18n';
 
 export function AssetThumb({ asset, className }: { asset: Pick<PublicAsset, 'thumbnail_url' | 'type' | 'title'>; className?: string }) {
   if (asset.thumbnail_url) return <img src={mediaUrl(asset.thumbnail_url)!} alt="" loading="lazy" className={clsx(className, 'object-cover')} />;
@@ -19,7 +21,7 @@ export function AssetThumb({ asset, className }: { asset: Pick<PublicAsset, 'thu
 export function TierPill({ tier, dark = false }: { tier: string; dark?: boolean }) {
   return (
     <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-xs/5 font-medium capitalize ring-1', tier === 'free' ? (dark ? 'bg-white/10 text-white ring-white/20' : 'bg-gray-50 text-gray-700 ring-black/10') : 'bg-fuchsia-950/80 text-white ring-fuchsia-950/10')}>
-      {tier === 'free' ? 'Free' : tier}
+      {tier === 'free' ? t('Free') : tier}
     </span>
   );
 }
@@ -45,10 +47,11 @@ function HoverThumb({ asset }: { asset: PublicAsset }) {
 
 export function AssetCard({ asset, dark = false }: { asset: PublicAsset; dark?: boolean }) {
   return (
+    <div className="relative flex w-full">
     <Link
       href={`/library/${asset.slug}`}
       data-dark={dark ? 'true' : undefined}
-      className="group relative flex flex-col overflow-hidden rounded-3xl bg-white shadow-xs ring-1 ring-black/5 data-dark:bg-gray-800 data-dark:ring-white/15 data-hover:shadow-md"
+      className="group relative flex w-full flex-col overflow-hidden rounded-3xl bg-white shadow-xs ring-1 ring-black/5 data-dark:bg-gray-800 data-dark:ring-white/15 data-hover:shadow-md"
     >
       <HoverThumb asset={asset} />
       <div className="flex flex-1 flex-col gap-2 p-5">
@@ -63,5 +66,7 @@ export function AssetCard({ asset, dark = false }: { asset: PublicAsset; dark?: 
         {asset.description && <p className="line-clamp-2 text-sm/6 text-gray-600 group-data-dark:text-gray-400">{asset.description}</p>}
       </div>
     </Link>
+      <FavoriteButton asset={asset} className="absolute top-3 right-3 z-10" />
+    </div>
   );
 }

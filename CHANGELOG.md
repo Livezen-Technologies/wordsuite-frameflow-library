@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Public website rebuilt to the new FrameFlow Library design: home, library browse with filters and paging, category pages, asset pages with settings and version history, collections, pricing with monthly/yearly prices, download, what's new, blog, help, creators, about, contact, licence and a new 404 page. Counts, assets and collections are live from the library.
+- "My library" for signed-in users: an overview, favorites (heart on every asset), download history and devices, with the device limit explained.
+- Sign in and create an account with WorkSuite OneAuth (secure redirect sign-in); the access-token form remains only in development builds.
+- The website and Download Center are available in English, Sinhala (සිංහල) and Tamil (தமிழ்), with a language switcher and correctly shaped Sinhala and Tamil text.
+- Download Center: collections with drag-and-drop (or button) ordering and a schedule, category rename, icon, hide, reorder and delete, tag merging, Access & tiers settings (device limits, publish gate, feed channels, allowed origins), per-asset audience rules, analytics with charts and searches that found nothing, webhooks with a one-time secret, test button and delivery log, and previews of unpublished versions.
 - Device sign-in: FrameFlow registers each computer (`POST /api/v1/devices/register`), users see and remove their devices (`/api/v1/me/devices`), and each plan has a device limit (Free 2, Pro 3, Business 10, Enterprise 50, changeable in settings). With Worksuite Cloud sign-in, downloads need a registered device.
 - My library: favorites that sync across devices (`/api/v1/me/favorites`, offline favorites merge on sign-in), download history (`/api/v1/me/downloads`) and a server copy of what each device has installed (`/api/v1/me/installs`).
 - Live updates: `GET /api/v1/sync/stream` pushes catalog changes to FrameFlow as Server-Sent Events, resuming from the last event after a reconnect.

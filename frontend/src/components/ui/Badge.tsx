@@ -1,7 +1,7 @@
 // Tailwind Plus Application UI · elements/badges (01 with border).
 import type { ReactNode } from 'react';
 import { classNames } from '@/core/format';
-import { humanize } from '@/core/schema';
+import { label, tierLabel } from '@/core/schema';
 
 export type Tone = 'gray' | 'red' | 'yellow' | 'green' | 'blue' | 'indigo' | 'purple' | 'pink' | 'orange';
 
@@ -39,10 +39,10 @@ const STATUS_TONE: Record<string, Tone> = {
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  return <Badge tone={STATUS_TONE[status] ?? 'gray'}>{humanize(status)}</Badge>;
+  return <Badge tone={STATUS_TONE[status] ?? 'gray'}>{label(status)}</Badge>;
 }
 
 const TIER_TONE: Record<string, Tone> = { free: 'gray', pro: 'indigo', business: 'purple', enterprise: 'pink' };
 export function TierBadge({ tier }: { tier: string }) {
-  return <Badge tone={TIER_TONE[tier] ?? 'gray'}>{tier}</Badge>;
+  return <Badge tone={TIER_TONE[tier] ?? 'gray'}>{tierLabel(tier)}</Badge>;
 }

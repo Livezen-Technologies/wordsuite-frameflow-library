@@ -14,8 +14,11 @@ export interface ApiErrorBody {
 
 export interface Me {
   id: string;
-  role: Role;
+  /** Download Center role; absent for a signed-in library user without admin access. */
+  role?: Role | null;
   plan?: string;
+  name?: string;
+  email?: string;
 }
 
 export interface Check {
@@ -112,7 +115,7 @@ export interface Asset {
   author: string;
   aspect_ratios: string[];
   platforms: string[];
-  audience_rules: unknown[];
+  audience_rules: AudienceRule[];
   dependencies: { asset_id: string; [k: string]: unknown }[];
   featured: boolean;
   publish_at: string | null;
@@ -150,6 +153,10 @@ export interface Overview {
   downloads_30d: number;
   active_devices_30d: number;
   downloads_by_day: Record<string, number>;
+  /** api-v1-additions: downloads per asset type in the window. */
+  downloads_by_type?: Partial<Record<AssetType, number>>;
+  installs_30d?: number;
+  applies_30d?: number;
   top_assets: { id: string; title: string; type: AssetType; downloads: number; applies: number; version: string | null }[];
   review_queue: { id: string; title: string; type: AssetType }[];
 }
@@ -232,3 +239,86 @@ export interface Collection {
 }
 
 export type SortKey = 'popular' | 'new' | 'trending' | 'az';
+
+// ---------------------------------------------------------------- api-v1-additions (docs/api-v1-additions.md)
+
+export interface AudienceRule {
+  effect: 'allow' | 'deny';
+  org_id?: string;
+  plan?: Tier | string;
+  role?: string;
+  region?: string;
+}
+
+export interface AdminCollection {
+  slug: string;
+  title: string;
+  description: string;
+  asset_ids: string[];
+  publish_at?: string | null;
+  unpublish_at?: string | null;
+  visible: boolean;
+}
+
+export interface LibrarySettings {
+  device_limits: Record<Tier, number>;
+  require_processing: boolean;
+  cors_origins: string[];
+  feed: { stable: Visibility[]; beta: Visibility[] };
+}
+
+export interface AssetAnalytics {
+  downloads_by_day: Record<string, number>;
+  installs: number;
+  applies: number;
+  favorites: number;
+  versions: { version: string; downloads: number }[];
+}
+
+export interface SearchAnalytics {
+  top: { term: string; count: number }[];
+  misses: { term: string; count: number; last_at: string }[];
+}
+
+export const WEBHOOK_EVENTS = ['asset.published', 'asset.updated', 'asset.unpublished', 'asset.deprecated', 'version.published'] as const;
+export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
+
+export interface Webhook {
+  id: string;
+  url: string;
+  events: WebhookEvent[];
+  active: boolean;
+  /** Only in the create response. */
+  secret?: string;
+  created_at?: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  event: string;
+  status_code: number | null;
+  ok: boolean;
+  attempt: number;
+  error: string | null;
+  created_at: string;
+}
+
+export interface Device {
+  id: string;
+  name: string;
+  os: 'windows' | 'macos' | 'linux' | string;
+  app_version: string;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export interface DownloadRecord {
+  id: string;
+  asset: PublicAsset | null;
+  version: string;
+  device_id: string | null;
+  status: string;
+  bytes: number | null;
+  started_at: string;
+  finished_at: string | null;
+}

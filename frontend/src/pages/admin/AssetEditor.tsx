@@ -17,9 +17,13 @@ import { Drawer, Modal } from '@/components/ui/Modal';
 import { useNotify } from '@/components/ui/Notifications';
 import { TableCard, TBody, EmptyRow, th, td, tdFirst, thFirst } from '@/components/ui/Table';
 import { ChecksList } from '@/components/Checks';
-import { LICENCE_TERMS, TIERS, VISIBILITIES, humanize, typeColor, typeName, ASSET_TYPES } from '@/core/schema';
+import { LICENCE_TERMS, TIERS, VISIBILITIES, label, roleLabel, tierLabel, typeColor, typeLongName, typeName } from '@/core/schema';
+import { msg, t, type MessageKey } from '@/i18n';
+import { AudienceRulesEditor, normalizeRules } from '@/components/AudienceRules';
+import { AssetAnalyticsCard } from '@/components/AssetAnalytics';
+import { useAdminPreviews } from '@/hooks/useAdminPreviews';
 import { classNames, formatBytes, formatDateTime, shortHash, splitList, timeAgo } from '@/core/format';
-import type { Asset, AssetVersion } from '@/types/api';
+import type { Asset, AssetVersion, AudienceRule } from '@/types/api';
 
 type TabKey = 'details' | 'versions' | 'licence' | 'dependencies' | 'activity';
 type Act = 'submit-review' | 'approve' | 'reject' | 'publish' | 'unpublish' | 'deprecate' | 'archive';
@@ -41,6 +45,7 @@ interface Draft {
   attribution_text: string;
   visibility: string;
   unpublish_at: string;
+  audience_rules?: AudienceRule[];
 }
 
 const toDraft = (a: Asset): Draft => ({
@@ -60,6 +65,7 @@ const toDraft = (a: Asset): Draft => ({
   attribution_text: a.attribution_text ?? '',
   visibility: a.visibility,
   unpublish_at: a.unpublish_at ? toLocalInput(a.unpublish_at) : '',
+  audience_rules: Array.isArray(a.audience_rules) ? a.audience_rules : [],
 });
 
 function toLocalInput(iso: string): string {
@@ -72,7 +78,9 @@ function toLocalInput(iso: string): string {
 export function patchFrom(a: Asset, d: Draft): Record<string, unknown> {
   const p: Record<string, unknown> = {};
   const base = toDraft(a);
-  for (const k of Object.keys(d) as (keyof Draft)[]) if (d[k] !== base[k]) p[k] = d[k];
+  for (const k of Object.keys(d) as (keyof Draft)[]) if (k !== 'audience_rules' && d[k] !== base[k]) p[k] = d[k];
+  const rules = normalizeRules(d.audience_rules ?? []);
+  if (JSON.stringify(rules) !== JSON.stringify(normalizeRules(base.audience_rules ?? []))) p.audience_rules = rules;
   if ('tags' in p) p.tags = splitList(d.tags);
   if ('keywords' in p) p.keywords = splitList(d.keywords);
   if ('category_id' in p) p.category_id = d.category_id || null;
@@ -91,7 +99,8 @@ export function availableActions(a: Asset, can: (p: Parameters<ReturnType<typeof
   return out;
 }
 
-const ACT_LABEL: Record<Act, string> = { 'submit-review': 'Submit for review', approve: 'Approve', reject: 'Reject…', publish: 'Publish', unpublish: 'Unpublish', deprecate: 'Deprecate', archive: 'Archive' };
+const ACT_LABEL: Record<Act, MessageKey> = { 'submit-review': msg('Submit for review'), approve: msg('Approve'), reject: msg('Reject…'), publish: msg('Publish'), unpublish: msg('Unpublish'), deprecate: msg('Deprecate'), archive: msg('Archive') };
+const ACT_CONFIRM: Record<Act, MessageKey> = { 'submit-review': msg('Submit for review'), approve: msg('Approve'), reject: msg('Reject'), publish: msg('Publish'), unpublish: msg('Unpublish'), deprecate: msg('Deprecate'), archive: msg('Archive') };
 
 function metaDiff(prev: Record<string, unknown> | undefined, next: Record<string, unknown>): string[] {
   if (!prev) return [];
@@ -135,18 +144,25 @@ export function AssetEditor() {
     if (a) setDraft(toDraft(a));
   }, [a]);
 
+  const currentV: AssetVersion | undefined = a ? (a.versions.find((v) => v.version === (a.pending_version ?? a.current_version)) ?? a.versions.at(-1)) : undefined;
+  const isLive = !!a && a.status === 'published' && ['public', 'unlisted'].includes(a.visibility);
+  const shownV = a && isLive ? (a.versions.find((v) => v.version === a.published_version) ?? currentV) : currentV;
+  // Drafts and unlisted versions: the authenticated admin preview route (object URLs); live assets use the public /previews.
+  const adminPreviews = useAdminPreviews(a?.id ?? id, shownV, !isLive && Object.keys(shownV?.previews ?? {}).length > 0);
+
   const editable = !!a && (can('asset.edit.all') || (can('asset.edit.own') && a.created_by === me?.id));
   const tierEditable = can('access.manage') || me?.role === 'content_editor';
   const cats = useMemo(() => (categories.data ?? []).filter((c) => c.type === a?.type), [categories.data, a?.type]);
 
   if (q.isPending) return <Loading />;
-  if (q.isError || !a || !draft) return <Alert tone="error" title="Couldn’t load this asset">{q.error ? errorMessage(q.error) : 'Not found.'}</Alert>;
+  if (q.isError || !a || !draft) return <Alert tone="error" title={t('Couldn’t load this asset')}>{q.error ? errorMessage(q.error) : t('Not found.')}</Alert>;
 
-  const current: AssetVersion | undefined = a.versions.find((v) => v.version === (a.pending_version ?? a.current_version)) ?? a.versions.at(-1);
+  const current = currentV;
   const actions = availableActions(a, can, editable);
-  const live = a.status === 'published' && ['public', 'unlisted'].includes(a.visibility);
-  const shownVersion = live ? a.versions.find((v) => v.version === a.published_version) ?? current : current;
-  const previewMap = Object.fromEntries(Object.entries(shownVersion?.previews ?? {}).map(([k, p]) => [k, previewUrl(a.id, shownVersion!.version, k, p.ext)]));
+  const live = isLive;
+  const shownVersion = shownV;
+  const previewMap: Record<string, string> = live ? Object.fromEntries(Object.entries(shownVersion?.previews ?? {}).map(([k, p]) => [k, previewUrl(a.id, shownVersion!.version, k, p.ext)])) : adminPreviews.urls;
+  const thumbUrl = preview.data?.thumbnail_url ?? (!live ? adminPreviews.urls.thumbnail : undefined);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft({ ...draft, [k]: v });
   const refresh = (next?: Asset) => {
     if (next) qc.setQueryData(['asset', id], next);
@@ -158,15 +174,15 @@ export function AssetEditor() {
 
   async function save() {
     const patch = patchFrom(a!, draft!);
-    if (!Object.keys(patch).length) return notify('Nothing to save');
+    if (!Object.keys(patch).length) return notify(t('Nothing to save'));
     setSaving(true);
     setFieldErrors({});
     try {
       refresh(await adminApi.updateAsset(a!.id, patch));
-      notify('Saved');
+      notify(t('Saved'));
     } catch (e) {
       if (e instanceof ApiError) setFieldErrors(e.fieldErrors);
-      fail('Couldn’t save', errorMessage(e));
+      fail(t('Couldn’t save'), errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -182,7 +198,7 @@ export function AssetEditor() {
       setReason('');
     } catch (e) {
       if (e instanceof ApiError && e.code === 'PUBLISH_BLOCKED') setBlockers(e.details.map((d) => String(d.message ?? d.rule)));
-      fail('That didn’t work', errorMessage(e));
+      fail(t('That didn’t work'), errorMessage(e));
       setConfirm(null);
     } finally {
       setWorking(false);
@@ -199,7 +215,7 @@ export function AssetEditor() {
       deprecate: () => adminApi.deprecate(a.id, reason || undefined),
       archive: () => adminApi.archive(a.id),
     };
-    const done: Record<Act, string> = { 'submit-review': 'Submitted for review', approve: 'Approved', reject: 'Rejected', publish: 'Published to the FrameFlow feed', unpublish: 'Unpublished', deprecate: 'Deprecated', archive: 'Archived' };
+    const done: Record<Act, string> = { 'submit-review': t('Submitted for review'), approve: t('Approved'), reject: t('Rejected'), publish: t('Published to the FrameFlow feed'), unpublish: t('Unpublished'), deprecate: t('Deprecated'), archive: t('Archived') };
     void run(fns[act], done[act]);
   };
 
@@ -209,86 +225,88 @@ export function AssetEditor() {
     try {
       const up = await adminApi.upload(file);
       refresh(await adminApi.updateAsset(a!.id, { thumbnail_upload_id: up.id }));
-      notify('Thumbnail replaced', 'It ships with the next publish.');
+      notify(t('Thumbnail replaced'), t('It ships with the next publish.'));
     } catch (e) {
-      fail('Couldn’t replace the thumbnail', errorMessage(e));
+      fail(t('Couldn’t replace the thumbnail'), errorMessage(e));
     } finally {
       setWorking(false);
     }
   }
 
   const tabs: { key: TabKey; name: string; count?: number }[] = [
-    { key: 'details', name: 'Details' },
-    { key: 'versions', name: 'Files & Versions', count: a.versions.length },
-    { key: 'licence', name: 'Licence & Access' },
-    { key: 'dependencies', name: 'Dependencies', count: a.dependencies?.length ?? 0 },
-    ...(can('analytics.view') ? [{ key: 'activity' as const, name: 'Activity' }] : []),
+    { key: 'details', name: t('Details') },
+    { key: 'versions', name: t('Files & Versions'), count: a.versions.length },
+    { key: 'licence', name: t('Licence & Access') },
+    { key: 'dependencies', name: t('Dependencies'), count: a.dependencies?.length ?? 0 },
+    ...(can('analytics.view') ? [{ key: 'activity' as const, name: t('Activity') }] : []),
   ];
 
   const saveBar = editable && (
     <div className="flex items-center gap-3 border-t border-gray-900/10 pt-6 dark:border-white/10">
-      <Button onClick={() => void save()} loading={saving}>Save changes</Button>
-      <Button variant="secondary" onClick={() => { setDraft(toDraft(a)); setFieldErrors({}); }}>Discard</Button>
+      <Button onClick={() => void save()} loading={saving}>{t('Save changes')}</Button>
+      <Button variant="secondary" onClick={() => { setDraft(toDraft(a)); setFieldErrors({}); }}>{t('Discard')}</Button>
     </div>
   );
 
-  const confirmTitle = !confirm ? '' : 'act' in confirm ? `${ACT_LABEL[confirm.act].replace('…', '')} “${a.title}”?` : 'rollback' in confirm ? `Roll back to ${confirm.rollback}?` : `Publish version ${confirm.publishVersion}?`;
+  const confirmTitle = !confirm ? '' : 'act' in confirm ? t('{action} “{title}”?', { action: t(ACT_CONFIRM[confirm.act]), title: a.title }) : 'rollback' in confirm ? t('Roll back to {version}?', { version: confirm.rollback }) : t('Publish version {version}?', { version: confirm.publishVersion });
   const confirmText: ReactNode = !confirm
     ? null
     : 'rollback' in confirm
-      ? `${confirm.rollback} becomes the live version in the FrameFlow feed again.`
+      ? t('{version} becomes the live version in the FrameFlow feed again.', { version: confirm.rollback })
       : 'publishVersion' in confirm
-        ? 'This version is packaged, signed and added to the FrameFlow feed.'
+        ? t('This version is packaged, signed and added to the FrameFlow feed.')
         : confirm.act === 'publish'
-          ? `Version ${a.pending_version ?? a.current_version} is packaged, signed and added to the ${a.visibility === 'internal' ? 'beta' : 'stable'} FrameFlow feed.`
+          ? a.visibility === 'internal'
+            ? t('Version {version} is packaged, signed and added to the beta FrameFlow feed.', { version: a.pending_version ?? a.current_version ?? '' })
+            : t('Version {version} is packaged, signed and added to the stable FrameFlow feed.', { version: a.pending_version ?? a.current_version ?? '' })
           : confirm.act === 'archive'
-            ? 'Archived assets leave the feed and the library. They can be restored to draft later.'
+            ? t('Archived assets leave the feed and the library. They can be restored to draft later.')
             : confirm.act === 'unpublish'
-              ? 'The asset leaves the FrameFlow feed and returns to draft.'
+              ? t('The asset leaves the FrameFlow feed and returns to draft.')
               : confirm.act === 'deprecate'
-                ? 'Installed copies keep working; FrameFlow stops offering it to new users.'
+                ? t('Installed copies keep working; FrameFlow stops offering it to new users.')
                 : confirm.act === 'reject'
-                  ? 'The asset goes back to draft with your reason.'
+                  ? t('The asset goes back to draft with your reason.')
                   : null;
 
   return (
     <div className="space-y-6">
       <PageHeading
-        breadcrumbs={[{ name: 'Asset Library', to: '/admin/assets' }, { name: typeName(a.type), to: `/admin/assets?type=${a.type}` }, { name: a.title }]}
+        breadcrumbs={[{ name: t('Asset Library'), to: '/admin/assets' }, { name: typeName(a.type), to: `/admin/assets?type=${a.type}` }, { name: a.title }]}
         title={<span className="flex flex-wrap items-center gap-3"><TypeTile color={typeColor(a.type)} label={typeName(a.type)} className="size-9" />{a.title}<StatusBadge status={a.status} /></span>}
         meta={
           <>
             <span className="font-mono">v{a.current_version ?? '—'}</span>
-            {a.published_version && <span>live {a.published_version}</span>}
-            {a.pending_version && <Badge tone="yellow">pending {a.pending_version}</Badge>}
-            <span>{ASSET_TYPES[a.type]?.name ?? a.type}</span>
-            <span>updated {timeAgo(a.updated_at)}</span>
+            {a.published_version && <span>{t('live {version}', { version: a.published_version })}</span>}
+            {a.pending_version && <Badge tone="yellow">{t('pending {version}', { version: a.pending_version })}</Badge>}
+            <span>{typeLongName(a.type)}</span>
+            <span>{t('updated {when}', { when: timeAgo(a.updated_at) })}</span>
           </>
         }
       />
-      {a.review && !a.review.approved && a.status === 'draft' && <Alert tone="error" title="Rejected in review">{a.review.reason}</Alert>}
-      {blockers.length > 0 && <Alert tone="error" title="Publishing is blocked" items={blockers} />}
-      {!editable && <Alert tone="info">You can view this asset but not edit it with your role.</Alert>}
+      {a.review && !a.review.approved && a.status === 'draft' && <Alert tone="error" title={t('Rejected in review')}>{a.review.reason}</Alert>}
+      {blockers.length > 0 && <Alert tone="error" title={t('Publishing is blocked')} items={blockers} />}
+      {!editable && <Alert tone="info">{t('You can view this asset but not edit it with your role.')}</Alert>}
 
       <div className="grid gap-8 lg:grid-cols-3">
         <div className="min-w-0 space-y-6 lg:col-span-2">
-          <Tabs label="Editor sections" tabs={tabs} current={tab} onChange={setTab} />
+          <Tabs label={t('Editor sections')} tabs={tabs} current={tab} onChange={setTab} />
 
           {tab === 'details' && (
             <fieldset disabled={!editable} className="space-y-6">
-              <legend className="sr-only">Details</legend>
+              <legend className="sr-only">{t('Details')}</legend>
               <div className="grid grid-cols-1 gap-x-6 gap-y-6 sm:grid-cols-6">
-                <TextField className="sm:col-span-6" label="Title" value={draft.title} error={fieldErrors.title} onChange={(e) => set('title', e.target.value)} />
-                <TextField className="sm:col-span-3" label="Slug" value={draft.slug} readOnly={!!a.published_at} hint={a.published_at ? 'Immutable after first publish' : undefined} error={fieldErrors.slug} onChange={(e) => set('slug', e.target.value)} />
-                <SelectField className="sm:col-span-3" label="Category" value={draft.category_id} error={fieldErrors.category_id} onChange={(e) => set('category_id', e.target.value)} options={[['', 'None'], ...cats.map((c): [string, string] => [c.id, c.name])]} />
-                <TextArea className="sm:col-span-6" label="Description" value={draft.description} error={fieldErrors.description} onChange={(e) => set('description', e.target.value)} />
-                <TextField className="sm:col-span-6" label="Tags" hint="Comma separated, up to 20" value={draft.tags} error={fieldErrors.tags} onChange={(e) => set('tags', e.target.value)} />
-                <TextField className="sm:col-span-6" label="Search keywords" hint="Incl. Sinhala / Tamil terms" value={draft.keywords} error={fieldErrors.keywords} onChange={(e) => set('keywords', e.target.value)} />
-                <TextField className="sm:col-span-3" label="Min FrameFlow version" value={draft.min_app_version} error={fieldErrors.min_app_version} onChange={(e) => set('min_app_version', e.target.value)} />
-                <TextField className="sm:col-span-3" label="Author / source" value={draft.author} onChange={(e) => set('author', e.target.value)} />
-                <Checkbox className="sm:col-span-6" label="Featured" description="Shown in the Featured rail in FrameFlow and on the public site." checked={draft.featured} onChange={(e) => set('featured', e.target.checked)} />
+                <TextField className="sm:col-span-6" label={t('Title')} value={draft.title} error={fieldErrors.title} onChange={(e) => set('title', e.target.value)} />
+                <TextField className="sm:col-span-3" label={t('Slug')} value={draft.slug} readOnly={!!a.published_at} hint={a.published_at ? t('Immutable after first publish') : undefined} error={fieldErrors.slug} onChange={(e) => set('slug', e.target.value)} />
+                <SelectField className="sm:col-span-3" label={t('Category')} value={draft.category_id} error={fieldErrors.category_id} onChange={(e) => set('category_id', e.target.value)} options={[['', t('None')], ...cats.map((c): [string, string] => [c.id, c.name])]} />
+                <TextArea className="sm:col-span-6" label={t('Description')} value={draft.description} error={fieldErrors.description} onChange={(e) => set('description', e.target.value)} />
+                <TextField className="sm:col-span-6" label={t('Tags')} hint={t('Comma separated, up to 20')} value={draft.tags} error={fieldErrors.tags} onChange={(e) => set('tags', e.target.value)} />
+                <TextField className="sm:col-span-6" label={t('Search keywords')} hint={t('Incl. Sinhala / Tamil terms')} value={draft.keywords} error={fieldErrors.keywords} onChange={(e) => set('keywords', e.target.value)} />
+                <TextField className="sm:col-span-3" label={t('Min FrameFlow version')} value={draft.min_app_version} error={fieldErrors.min_app_version} onChange={(e) => set('min_app_version', e.target.value)} />
+                <TextField className="sm:col-span-3" label={t('Author / source')} value={draft.author} onChange={(e) => set('author', e.target.value)} />
+                <Checkbox className="sm:col-span-6" label={t('Featured')} description={t('Shown in the Featured rail in FrameFlow and on the public site.')} checked={draft.featured} onChange={(e) => set('featured', e.target.checked)} />
                 <div className="sm:col-span-6">
-                  <p className="text-sm/6 font-medium text-gray-900 dark:text-white">Detected metadata</p>
+                  <p className="text-sm/6 font-medium text-gray-900 dark:text-white">{t('Detected metadata')}</p>
                   <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-gray-50 p-3 text-xs text-gray-800 outline-1 outline-gray-200 dark:bg-white/5 dark:text-gray-200 dark:outline-white/10">{JSON.stringify(a.meta, null, 2)}</pre>
                 </div>
               </div>
@@ -298,18 +316,18 @@ export function AssetEditor() {
 
           {tab === 'licence' && (
             <fieldset disabled={!editable} className="space-y-6">
-              <legend className="sr-only">Licence and access</legend>
+              <legend className="sr-only">{t('Licence and access')}</legend>
               <div className="grid grid-cols-1 gap-x-6 gap-y-6 sm:grid-cols-6">
-                <SelectField className="sm:col-span-3" label="Licence tier" value={draft.licence_tier} disabled={!tierEditable} hint={tierEditable ? 'Which FrameFlow plans can download it' : 'Needs the access.manage permission'} error={fieldErrors.licence_tier} onChange={(e) => set('licence_tier', e.target.value)} options={TIERS.map((t) => [t, t])} />
-                <SelectField className="sm:col-span-3" label="Licence terms" value={draft.licence_terms} onChange={(e) => set('licence_terms', e.target.value)} options={LICENCE_TERMS.map((t) => [t, humanize(t)])} />
-                <TextArea className="sm:col-span-6" label="Licence text" value={draft.licence_text} onChange={(e) => set('licence_text', e.target.value)} />
-                <Checkbox className="sm:col-span-6" label="Attribution required" checked={draft.attribution_required} onChange={(e) => set('attribution_required', e.target.checked)} />
-                <TextField className="sm:col-span-6" label="Attribution text" value={draft.attribution_text} error={fieldErrors.attribution_text} onChange={(e) => set('attribution_text', e.target.value)} />
-                <SelectField className="sm:col-span-3" label="Visibility" value={draft.visibility} hint="public → stable feed · internal → beta feed" error={fieldErrors.visibility} onChange={(e) => set('visibility', e.target.value)} options={VISIBILITIES.map((t) => [t, t])} />
-                <TextField className="sm:col-span-3" type="datetime-local" label="Scheduled unpublish" value={draft.unpublish_at} onChange={(e) => set('unpublish_at', e.target.value)} hint="Leave empty for none" />
+                <SelectField className="sm:col-span-3" label={t('Licence tier')} value={draft.licence_tier} disabled={!tierEditable} hint={tierEditable ? t('Which FrameFlow plans can download it') : t('Needs the access.manage permission')} error={fieldErrors.licence_tier} onChange={(e) => set('licence_tier', e.target.value)} options={TIERS.map((x) => [x, tierLabel(x)])} />
+                <SelectField className="sm:col-span-3" label={t('Licence terms')} value={draft.licence_terms} onChange={(e) => set('licence_terms', e.target.value)} options={LICENCE_TERMS.map((x) => [x, label(x)])} />
+                <TextArea className="sm:col-span-6" label={t('Licence text')} value={draft.licence_text} onChange={(e) => set('licence_text', e.target.value)} />
+                <Checkbox className="sm:col-span-6" label={t('Attribution required')} checked={draft.attribution_required} onChange={(e) => set('attribution_required', e.target.checked)} />
+                <TextField className="sm:col-span-6" label={t('Attribution text')} value={draft.attribution_text} error={fieldErrors.attribution_text} onChange={(e) => set('attribution_text', e.target.value)} />
+                <SelectField className="sm:col-span-3" label={t('Visibility')} value={draft.visibility} hint={t('public → stable feed · internal → beta feed')} error={fieldErrors.visibility} onChange={(e) => set('visibility', e.target.value)} options={VISIBILITIES.map((x) => [x, label(x)])} />
+                <TextField className="sm:col-span-3" type="datetime-local" label={t('Scheduled unpublish')} value={draft.unpublish_at} onChange={(e) => set('unpublish_at', e.target.value)} hint={t('Leave empty for none')} />
                 <div className="sm:col-span-6">
-                  <p className="text-sm/6 font-medium text-gray-900 dark:text-white">Audience rules</p>
-                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{a.audience_rules?.length ? <code className="text-xs">{JSON.stringify(a.audience_rules)}</code> : 'None — everyone on a covering plan.'} Editing audience rules (A10) needs an API for plan → tier mapping and device limits; not available yet.</p>
+                  <AudienceRulesEditor rules={draft.audience_rules ?? []} onChange={(r) => set('audience_rules', r)} disabled={!editable || !can('access.manage')} errors={fieldErrors.audience_rules} />
+                  {!can('access.manage') && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t('Needs the access.manage permission')}</p>}
                 </div>
               </div>
               {saveBar}
@@ -319,18 +337,18 @@ export function AssetEditor() {
           {tab === 'versions' && (
             <div className="space-y-6">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm text-gray-500 dark:text-gray-400">Versions never overwrite. Publish or roll back any packaged version.</p>
-                {editable && <Button variant="soft" onClick={() => setVersionOpen(true)}>Upload new version</Button>}
+                <p className="text-sm text-gray-500 dark:text-gray-400">{t('Versions never overwrite. Publish or roll back any packaged version.')}</p>
+                {editable && <Button variant="soft" onClick={() => setVersionOpen(true)}>{t('Upload new version')}</Button>}
               </div>
-              <TableCard caption="Versions">
+              <TableCard caption={t('Versions')}>
                 <thead>
                   <tr>
-                    <th scope="col" className={thFirst}>Version</th>
-                    <th scope="col" className={th}>Status</th>
-                    <th scope="col" className={classNames(th, 'hidden md:table-cell')}>Changelog</th>
-                    <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>Package</th>
-                    <th scope="col" className={classNames(th, 'hidden lg:table-cell')}>Created</th>
-                    <th scope="col" className={th}><span className="sr-only">Actions</span></th>
+                    <th scope="col" className={thFirst}>{t('Version')}</th>
+                    <th scope="col" className={th}>{t('Status')}</th>
+                    <th scope="col" className={classNames(th, 'hidden md:table-cell')}>{t('Changelog')}</th>
+                    <th scope="col" className={classNames(th, 'hidden sm:table-cell')}>{t('Package')}</th>
+                    <th scope="col" className={classNames(th, 'hidden lg:table-cell')}>{t('Created')}</th>
+                    <th scope="col" className={th}><span className="sr-only">{t('Actions')}</span></th>
                   </tr>
                 </thead>
                 <TBody>
@@ -341,11 +359,11 @@ export function AssetEditor() {
                       <tr key={v.id}>
                         <td className={tdFirst}>
                           <span className="font-mono">{v.version}</span>
-                          {v.is_breaking && <Badge tone="red" className="ml-2">breaking</Badge>}
-                          {v.version === a.published_version && <Badge tone="green" className="ml-2">live</Badge>}
+                          {v.is_breaking && <Badge tone="red" className="ml-2">{t('breaking')}</Badge>}
+                          {v.version === a.published_version && <Badge tone="green" className="ml-2">{t('live')}</Badge>}
                           {diff.length > 0 && (
                             <details className="mt-1 text-xs font-normal text-gray-500 dark:text-gray-400">
-                              <summary className="cursor-pointer">Metadata changes ({diff.length})</summary>
+                              <summary className="cursor-pointer">{t('Metadata changes ({n})', { n: diff.length })}</summary>
                               <ul className="mt-1 space-y-0.5 font-mono">{diff.map((d) => <li key={d} className="break-all">{d}</li>)}</ul>
                             </details>
                           )}
@@ -357,36 +375,36 @@ export function AssetEditor() {
                         <td className={classNames(td, 'text-right')}>
                           <div className="flex justify-end gap-3">
                             {can('asset.publish') && v.status === 'ready' && v.version !== a.published_version && (
-                              <Button variant="link" onClick={() => setConfirm({ publishVersion: v.version })}>Publish<span className="sr-only"> {v.version}</span></Button>
+                              <Button variant="link" onClick={() => setConfirm({ publishVersion: v.version })}>{t('Publish')}<span className="sr-only"> {v.version}</span></Button>
                             )}
                             {can('version.rollback') && v.package && v.version !== a.published_version && (
-                              <Button variant="link" onClick={() => setConfirm({ rollback: v.version })}>Roll back<span className="sr-only"> to {v.version}</span></Button>
+                              <Button variant="link" onClick={() => setConfirm({ rollback: v.version })}>{t('Roll back')}<span className="sr-only"> {v.version}</span></Button>
                             )}
                           </div>
                         </td>
                       </tr>
                     );
                   })}
-                  {!a.versions.length && <EmptyRow colSpan={6}>No versions.</EmptyRow>}
+                  {!a.versions.length && <EmptyRow colSpan={6}>{t('No versions.')}</EmptyRow>}
                 </TBody>
               </TableCard>
 
-              <Card title={`Generated previews${shownVersion ? ` · v${shownVersion.version}` : ''}`}>
-                {Object.keys(previewMap).length ? (
-                  live ? (
-                    <PreviewGallery previews={previewMap} title={a.title} tileClassName="rounded-md outline-1 outline-black/5 dark:outline-white/10" captionClassName="mt-1 text-xs text-gray-500 dark:text-gray-400" />
-                  ) : (
-                    <div className="text-sm text-gray-500 dark:text-gray-400">
-                      <p>Generated: {Object.entries(shownVersion?.previews ?? {}).map(([k, p]) => `${k}.${p.ext} (${formatBytes(p.size)})`).join(', ')}.</p>
-                      <p className="mt-1">The API serves previews only for live assets (<code>/previews/…</code>); they show here once the asset is published.</p>
-                    </div>
-                  )
+              <Card title={`${t('Generated previews')}${shownVersion ? ` · v${shownVersion.version}` : ''}`} actions={!live && Object.keys(shownVersion?.previews ?? {}).length > 0 ? <Badge tone="yellow">{t('Not live: admin preview')}</Badge> : undefined}>
+                {!live && adminPreviews.status === 'loading' ? (
+                  <Loading label={t('Loading previews…')} />
+                ) : !live && adminPreviews.status === 'error' ? (
+                  <Alert tone="error" title={t('Couldn’t load the previews')}>
+                    {adminPreviews.error}
+                    <p className="mt-1">{t('Generated: {files}.', { files: Object.entries(shownVersion?.previews ?? {}).map(([k, p]) => `${k}.${p.ext} (${formatBytes(p.size)})`).join(', ') })}</p>
+                  </Alert>
+                ) : Object.keys(previewMap).length ? (
+                  <PreviewGallery previews={previewMap} exts={live ? undefined : adminPreviews.exts} title={a.title} tileClassName="rounded-md outline-1 outline-black/5 dark:outline-white/10" captionClassName="mt-1 text-xs text-gray-500 dark:text-gray-400" />
                 ) : (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">{shownVersion?.processing && ['queued', 'running'].includes(shownVersion.processing.status) ? 'A worker is generating previews…' : 'No generated previews for this version.'}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{shownVersion?.processing && ['queued', 'running'].includes(shownVersion.processing.status) ? t('A worker is generating previews…') : t('No generated previews for this version.')}</p>
                 )}
               </Card>
 
-              <Card title="Files">
+              <Card title={t('Files')}>
                 <ul role="list" className="divide-y divide-gray-100 text-sm dark:divide-white/5">
                   {(current?.files ?? []).map((f) => (
                     <li key={f.sha256 + f.role} className="flex flex-wrap items-center justify-between gap-2 py-2">
@@ -396,17 +414,17 @@ export function AssetEditor() {
                   ))}
                 </ul>
                 <div className="mt-4 flex flex-wrap items-center gap-4 border-t border-gray-100 pt-4 dark:border-white/5">
-                  {preview.data?.thumbnail_url ? (
-                    <img src={preview.data.thumbnail_url} alt={`Thumbnail of ${a.title}`} className="h-20 w-36 rounded-md object-cover outline-1 outline-black/5" />
+                  {thumbUrl ? (
+                    <img src={thumbUrl} alt={t('Thumbnail of {title}', { title: a.title })} className="h-20 w-36 rounded-md object-cover outline-1 outline-black/5" />
                   ) : (
                     <TypeTile color={typeColor(a.type)} label={typeName(a.type)} className="h-20 w-36" />
                   )}
                   <div className="text-sm">
-                    <p className="font-medium text-gray-900 dark:text-white">Thumbnail</p>
-                    <p className="text-gray-500 dark:text-gray-400">{a.thumbnail_file ? a.thumbnail_file.filename : 'Missing'}{!preview.data?.thumbnail_url && a.thumbnail_file ? ' · preview appears once published' : ''}</p>
+                    <p className="font-medium text-gray-900 dark:text-white">{t('Thumbnail')}</p>
+                    <p className="text-gray-500 dark:text-gray-400">{a.thumbnail_file ? a.thumbnail_file.filename : t('Missing')}</p>
                     {editable && (
                       <div className="mt-2">
-                        <Label htmlFor="thumb">Replace thumbnail (PNG or WebP, 640×360)</Label>
+                        <Label htmlFor="thumb">{t('Replace thumbnail (PNG or WebP, 640×360)')}</Label>
                         <input id="thumb" type="file" accept="image/png,image/webp" disabled={working} onChange={(e) => void replaceThumbnail(e.target.files?.[0])} className="mt-1 block w-full text-sm text-gray-700 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-indigo-600 dark:text-gray-300 dark:file:bg-indigo-500/20 dark:file:text-indigo-300" />
                       </div>
                     )}
@@ -418,30 +436,31 @@ export function AssetEditor() {
 
           {tab === 'dependencies' && <Dependencies asset={a} editable={editable} onSaved={refresh} />}
 
+          {tab === 'activity' && <AssetAnalyticsCard assetId={a.id} />}
           {tab === 'activity' && (
-            <Card title="Activity">
+            <Card title={t('Activity')}>
               {activity.isPending ? <Loading /> : activity.isError ? <p className="text-sm text-red-600">{errorMessage(activity.error)}</p> : (
                 <ul role="list" className="space-y-3 text-sm">
                   {activity.data.map((e, i) => (
                     <li key={e.id ?? i} className="flex flex-wrap justify-between gap-2">
-                      <span><span className="font-mono text-xs text-gray-900 dark:text-white">{e.action}</span> <span className="text-gray-500 dark:text-gray-400">by {e.actor_role ?? 'system'}</span></span>
+                      <span><span className="font-mono text-xs text-gray-900 dark:text-white">{e.action}</span> <span className="text-gray-500 dark:text-gray-400">{t('by {who}', { who: e.actor_role ? roleLabel(e.actor_role) : t('system') })}</span></span>
                       <time dateTime={e.at} className="text-gray-500 dark:text-gray-400" title={formatDateTime(e.at)}>{timeAgo(e.at)}</time>
                     </li>
                   ))}
-                  {!activity.data.length && <li className="text-gray-500">No activity.</li>}
+                  {!activity.data.length && <li className="text-gray-500">{t('No activity.')}</li>}
                 </ul>
               )}
             </Card>
           )}
         </div>
 
-        <aside className="space-y-6" aria-label="Publishing">
-          <Card title="Publishing">
+        <aside className="space-y-6" aria-label={t('Publishing')}>
+          <Card title={t('Publishing')}>
             <dl className="mb-4 grid grid-cols-2 gap-2 text-sm">
-              <dt className="text-gray-500 dark:text-gray-400">Status</dt><dd><StatusBadge status={a.status} /></dd>
-              <dt className="text-gray-500 dark:text-gray-400">Tier</dt><dd><TierBadge tier={a.licence_tier} /></dd>
-              <dt className="text-gray-500 dark:text-gray-400">Visibility</dt><dd className="text-gray-900 dark:text-white">{a.visibility}</dd>
-              <dt className="text-gray-500 dark:text-gray-400">Published</dt><dd className="text-gray-900 dark:text-white">{a.published_at ? timeAgo(a.published_at) : '—'}</dd>
+              <dt className="text-gray-500 dark:text-gray-400">{t('Status')}</dt><dd><StatusBadge status={a.status} /></dd>
+              <dt className="text-gray-500 dark:text-gray-400">{t('Tier')}</dt><dd><TierBadge tier={a.licence_tier} /></dd>
+              <dt className="text-gray-500 dark:text-gray-400">{t('Visibility')}</dt><dd className="text-gray-900 dark:text-white">{label(a.visibility)}</dd>
+              <dt className="text-gray-500 dark:text-gray-400">{t('Published')}</dt><dd className="text-gray-900 dark:text-white">{a.published_at ? timeAgo(a.published_at) : '—'}</dd>
             </dl>
             <div className="flex flex-col gap-2">
               {actions.map((act) => (
@@ -451,37 +470,37 @@ export function AssetEditor() {
                   disabled={working}
                   onClick={() => (act === 'submit-review' || act === 'approve' ? doAct(act) : setConfirm({ act }))}
                 >
-                  {act === 'publish' && a.pending_version ? `Publish ${a.pending_version}` : ACT_LABEL[act]}
+                  {act === 'publish' && a.pending_version ? t('Publish {version}', { version: a.pending_version }) : t(ACT_LABEL[act])}
                 </Button>
               ))}
-              {!actions.length && <p className="text-sm text-gray-500 dark:text-gray-400">No publishing actions for your role in this state.</p>}
+              {!actions.length && <p className="text-sm text-gray-500 dark:text-gray-400">{t('No publishing actions for your role in this state.')}</p>}
             </div>
             {can('asset.publish') && a.status !== 'archived' && (
-              <form className="mt-5 border-t border-gray-100 pt-4 dark:border-white/5" onSubmit={(e) => { e.preventDefault(); if (schedule) void run(() => adminApi.publish(a.id, { publish_at: new Date(schedule).toISOString() }), 'Publish scheduled'); }}>
-                <Label htmlFor="sched">Schedule publish</Label>
+              <form className="mt-5 border-t border-gray-100 pt-4 dark:border-white/5" onSubmit={(e) => { e.preventDefault(); if (schedule) void run(() => adminApi.publish(a.id, { publish_at: new Date(schedule).toISOString() }), t('Publish scheduled')); }}>
+                <Label htmlFor="sched">{t('Schedule publish')}</Label>
                 <input id="sched" type="datetime-local" value={schedule} onChange={(e) => setSchedule(e.target.value)} className={classNames(inputClass, 'mt-2')} />
-                <Button type="submit" variant="soft" size="sm" className="mt-2" disabled={!schedule || working}>Schedule</Button>
-                {a.publish_at && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Scheduled for {formatDateTime(a.publish_at)}</p>}
+                <Button type="submit" variant="soft" size="sm" className="mt-2" disabled={!schedule || working}>{t('Schedule')}</Button>
+                {a.publish_at && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t('Scheduled for {when}', { when: formatDateTime(a.publish_at) })}</p>}
               </form>
             )}
           </Card>
           <ProcessingCard asset={a} version={current} editable={editable} onQueued={() => refresh()} />
-          <Card title={`Checks · v${current?.version ?? '—'}`}>
+          <Card title={`${t('Checks')} · v${current?.version ?? '—'}`}>
             <ChecksList
               checks={current?.checks ?? []}
               extra={[
-                { label: 'Thumbnail', ok: !!a.thumbnail_file, text: a.thumbnail_file ? 'Present' : 'Missing' },
-                { label: 'Reviewer approval', ok: ['approved', 'published'].includes(a.status), text: ['approved', 'published'].includes(a.status) ? 'Done' : 'Pending' },
+                { label: t('Thumbnail'), ok: !!a.thumbnail_file, text: a.thumbnail_file ? t('Present') : t('Missing') },
+                { label: t('Reviewer approval'), ok: ['approved', 'published'].includes(a.status), text: ['approved', 'published'].includes(a.status) ? t('Done') : t('Pending') },
               ]}
             />
           </Card>
-          <Card title="Stats">
+          <Card title={t('Stats')}>
             <dl className="grid grid-cols-2 gap-3 text-sm">
-              {(['downloads', 'installs', 'applies', 'favorites'] as const).map((k) => (
-                <div key={k}><dt className="text-gray-500 capitalize dark:text-gray-400">{k}</dt><dd className="text-lg font-semibold text-gray-900 tabular-nums dark:text-white">{a.stats[k]}</dd></div>
+              {([['downloads', t('Downloads')], ['installs', t('Installs')], ['applies', t('Applies')], ['favorites', t('Favorites')]] as const).map(([k, name]) => (
+                <div key={k}><dt className="text-gray-500 dark:text-gray-400">{name}</dt><dd className="text-lg font-semibold text-gray-900 tabular-nums dark:text-white">{a.stats[k]}</dd></div>
               ))}
             </dl>
-            {a.status === 'published' && <p className="mt-3 text-xs"><Link to={`/library/${a.slug}`} className="font-semibold text-indigo-600 dark:text-indigo-400">View on the public site →</Link></p>}
+            {a.status === 'published' && <p className="mt-3 text-xs"><Link to={`/library/${a.slug}`} className="font-semibold text-indigo-600 dark:text-indigo-400">{t('View on the public site')} →</Link></p>}
           </Card>
         </aside>
       </div>
@@ -492,22 +511,22 @@ export function AssetEditor() {
         title={confirmTitle}
         description={confirmText}
         tone={confirm && 'act' in confirm && ['archive', 'unpublish', 'reject', 'deprecate'].includes(confirm.act) ? 'danger' : 'primary'}
-        confirmLabel={!confirm ? '' : 'act' in confirm ? ACT_LABEL[confirm.act].replace('…', '') : 'rollback' in confirm ? 'Roll back' : 'Publish'}
+        confirmLabel={!confirm ? '' : 'act' in confirm ? t(ACT_CONFIRM[confirm.act]) : 'rollback' in confirm ? t('Roll back') : t('Publish')}
         busy={working}
         confirmDisabled={!!confirm && 'act' in confirm && confirm.act === 'reject' && !reason.trim()}
         onConfirm={() => {
           if (!confirm) return;
           if ('act' in confirm) doAct(confirm.act);
-          else if ('rollback' in confirm) void run(() => adminApi.rollback(a.id, confirm.rollback), `Rolled back to ${confirm.rollback}`);
-          else void run(() => adminApi.publishVersion(a.id, confirm.publishVersion), `Published ${confirm.publishVersion}`);
+          else if ('rollback' in confirm) void run(() => adminApi.rollback(a.id, confirm.rollback), t('Rolled back to {version}', { version: confirm.rollback }));
+          else void run(() => adminApi.publishVersion(a.id, confirm.publishVersion), t('Published {version}', { version: confirm.publishVersion }));
         }}
       >
         {confirm && 'act' in confirm && ['reject', 'unpublish', 'deprecate'].includes(confirm.act) && (
-          <TextArea label={confirm.act === 'reject' ? 'Reason (sent to the editor)' : 'Reason (optional)'} value={reason} onChange={(e) => setReason(e.target.value)} required={confirm.act === 'reject'} autoFocus />
+          <TextArea label={confirm.act === 'reject' ? t('Reason (sent to the editor)') : t('Reason (optional)')} value={reason} onChange={(e) => setReason(e.target.value)} required={confirm.act === 'reject'} autoFocus />
         )}
       </Modal>
 
-      <NewVersionDrawer open={versionOpen} onClose={() => setVersionOpen(false)} asset={a} onDone={(next) => { refresh(next); setVersionOpen(false); notify('New version uploaded', `v${next.current_version}`); }} />
+      <NewVersionDrawer open={versionOpen} onClose={() => setVersionOpen(false)} asset={a} onDone={(next) => { refresh(next); setVersionOpen(false); notify(t('New version uploaded'), `v${next.current_version}`); }} />
     </div>
   );
 }
@@ -520,7 +539,7 @@ function NewVersionDrawer({ open, onClose, asset, onDone }: { open: boolean; onC
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async () => {
-    if (!file) return setError('Choose a file.');
+    if (!file) return setError(t('Choose a file.'));
     setBusy(true);
     setError(null);
     try {
@@ -537,16 +556,16 @@ function NewVersionDrawer({ open, onClose, asset, onDone }: { open: boolean; onC
     }
   };
   return (
-    <Drawer open={open} onClose={onClose} title="Upload new version" description={`Checked as ${typeName(asset.type)}. Live assets keep the current version until the new one is published.`}
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button onClick={() => void submit()} loading={busy}>Upload version</Button></>}>
+    <Drawer open={open} onClose={onClose} title={t('Upload new version')} description={t('Checked as {type}. Live assets keep the current version until the new one is published.', { type: typeName(asset.type) })}
+      footer={<><Button variant="secondary" onClick={onClose}>{t('Cancel')}</Button><Button onClick={() => void submit()} loading={busy}>{t('Upload version')}</Button></>}>
       <div className="space-y-6">
         <div>
-          <Label htmlFor="nv-file">File</Label>
+          <Label htmlFor="nv-file">{t('File')}</Label>
           <input id="nv-file" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="mt-2 block w-full text-sm text-gray-700 file:mr-3 file:rounded-md file:border-0 file:bg-indigo-50 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-indigo-600 dark:text-gray-300" />
         </div>
-        <TextField label="Version" placeholder="Auto (next minor, or major if breaking)" value={version} onChange={(e) => setVersion(e.target.value)} />
-        <TextArea label="Changelog" value={changelog} onChange={(e) => setChangelog(e.target.value)} />
-        <Checkbox label="Breaking change" description="FrameFlow warns users before updating." checked={breaking} onChange={(e) => setBreaking(e.target.checked)} />
+        <TextField label={t('Version')} placeholder={t('Auto (next minor, or major if breaking)')} value={version} onChange={(e) => setVersion(e.target.value)} />
+        <TextArea label={t('Changelog')} value={changelog} onChange={(e) => setChangelog(e.target.value)} />
+        <Checkbox label={t('Breaking change')} description={t('FrameFlow warns users before updating.')} checked={breaking} onChange={(e) => setBreaking(e.target.checked)} />
         {error && <Alert tone="error">{error}</Alert>}
       </div>
     </Drawer>
@@ -562,10 +581,10 @@ function Dependencies({ asset, editable, onSaved }: { asset: Asset; editable: bo
     setBusy(true);
     try {
       onSaved(await adminApi.updateAsset(asset.id, { dependencies: next }));
-      notify('Dependencies saved');
+      notify(t('Dependencies saved'));
       setRef('');
     } catch (e) {
-      fail('Couldn’t save dependencies', errorMessage(e));
+      fail(t('Couldn’t save dependencies'), errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -573,28 +592,28 @@ function Dependencies({ asset, editable, onSaved }: { asset: Asset; editable: bo
   const add = async () => {
     try {
       const target = await adminApi.getAsset(ref.trim());
-      if (target.id === asset.id || deps.some((d) => d.asset_id === target.id)) return fail('Already listed');
+      if (target.id === asset.id || deps.some((d) => d.asset_id === target.id)) return fail(t('Already listed'));
       await save([...deps, { asset_id: target.id }]);
     } catch (e) {
-      fail('No such asset', errorMessage(e));
+      fail(t('No such asset'), errorMessage(e));
     }
   };
   return (
-    <Card title="Dependencies">
-      <p className="text-sm text-gray-500 dark:text-gray-400">Assets that must be published for this one to publish (e.g. a font a text template uses).</p>
+    <Card title={t('Dependencies')}>
+      <p className="text-sm text-gray-500 dark:text-gray-400">{t('Assets that must be published for this one to publish (e.g. a font a text template uses).')}</p>
       <ul role="list" className="mt-4 divide-y divide-gray-100 text-sm dark:divide-white/5">
         {deps.map((d) => (
           <li key={d.asset_id} className="flex items-center justify-between gap-3 py-2">
             <Link to={`/admin/assets/${d.asset_id}`} className="font-mono text-xs text-indigo-600 dark:text-indigo-400">{d.asset_id}</Link>
-            {editable && <Button variant="link" disabled={busy} onClick={() => void save(deps.filter((x) => x.asset_id !== d.asset_id))}>Remove</Button>}
+            {editable && <Button variant="link" disabled={busy} onClick={() => void save(deps.filter((x) => x.asset_id !== d.asset_id))}>{t('Remove')}</Button>}
           </li>
         ))}
-        {!deps.length && <li className="py-2 text-gray-500 dark:text-gray-400">No dependencies.</li>}
+        {!deps.length && <li className="py-2 text-gray-500 dark:text-gray-400">{t('No dependencies.')}</li>}
       </ul>
       {editable && (
         <form className="mt-4 flex flex-wrap items-end gap-3" onSubmit={(e) => { e.preventDefault(); if (ref.trim()) void add(); }}>
-          <TextField className="min-w-60 flex-1" label="Add by asset id or slug" value={ref} onChange={(e) => setRef(e.target.value)} />
-          <Button type="submit" variant="secondary" loading={busy}>Add</Button>
+          <TextField className="min-w-60 flex-1" label={t('Add by asset id or slug')} value={ref} onChange={(e) => setRef(e.target.value)} />
+          <Button type="submit" variant="secondary" loading={busy}>{t('Add')}</Button>
         </form>
       )}
     </Card>
@@ -610,27 +629,27 @@ function ProcessingCard({ asset, version, editable, onQueued }: { asset: Asset; 
     setBusy(true);
     try {
       await adminApi.reprocess(asset.id, version?.version);
-      notify('Reprocessing queued', `v${version?.version}`);
+      notify(t('Reprocessing queued'), `v${version?.version}`);
       void qc.invalidateQueries({ queryKey: ['jobs'] });
       onQueued();
     } catch (e) {
-      fail('Couldn’t reprocess', errorMessage(e));
+      fail(t('Couldn’t reprocess'), errorMessage(e));
     } finally {
       setBusy(false);
     }
   };
   return (
-    <Card title="Processing" actions={<Link to="/admin/processing" className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">Jobs →</Link>}>
+    <Card title={t('Processing')} actions={<Link to="/admin/processing" className="text-sm font-semibold text-indigo-600 dark:text-indigo-400">{t('Jobs')} →</Link>}>
       <div className="flex items-center justify-between gap-3 text-sm">
         <span className="text-gray-500 dark:text-gray-400">v{version?.version ?? '—'}</span>
-        {p ? <StatusBadge status={p.status} /> : <Badge tone="gray">not queued</Badge>}
+        {p ? <StatusBadge status={p.status} /> : <Badge tone="gray">{t('not queued')}</Badge>}
       </div>
       {p?.error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{p.error}</p>}
-      {p?.finished_at && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Finished {timeAgo(p.finished_at)}</p>}
-      {p && ['queued', 'running'].includes(p.status) && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400" role="status">Waiting for a worker; this page refreshes on its own.</p>}
+      {p?.finished_at && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t('Finished {when}', { when: timeAgo(p.finished_at) })}</p>}
+      {p && ['queued', 'running'].includes(p.status) && <p className="mt-2 text-xs text-gray-500 dark:text-gray-400" role="status">{t('Waiting for a worker; this page refreshes on its own.')}</p>}
       {editable && version && !(p && ['queued', 'running'].includes(p.status)) && (
         <Button className="mt-3" size="sm" variant={p?.status === 'failed' ? 'soft' : 'secondary'} loading={busy} onClick={() => void reprocess()}>
-          {p?.status === 'failed' ? 'Retry processing' : 'Reprocess'}
+          {p?.status === 'failed' ? t('Retry processing') : t('Reprocess')}
         </Button>
       )}
     </Card>

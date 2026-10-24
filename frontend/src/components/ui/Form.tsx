@@ -136,3 +136,27 @@ export function CheckMark() {
     </svg>
   );
 }
+
+/** Tailwind Plus Application UI · forms/toggles (04 with left label and description): a checkbox drawn as a switch. */
+export function Toggle({ label, description, className, id, ...rest }: { label: ReactNode; description?: ReactNode; className?: string } & Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>) {
+  const auto = useId();
+  const fid = id ?? auto;
+  return (
+    <div className={classNames('flex items-center justify-between gap-6', className)}>
+      <span className="flex grow flex-col">
+        <label htmlFor={fid} className="text-sm/6 font-medium text-gray-900 dark:text-white">
+          {label}
+        </label>
+        {description && (
+          <span id={`${fid}-d`} className="text-sm text-gray-500 dark:text-gray-400">
+            {description}
+          </span>
+        )}
+      </span>
+      <div className="group relative inline-flex w-11 shrink-0 rounded-full bg-gray-200 p-0.5 inset-ring inset-ring-gray-900/5 outline-offset-2 outline-indigo-600 transition-colors duration-200 ease-in-out has-checked:bg-indigo-600 has-focus-visible:outline-2 has-disabled:opacity-50 dark:bg-white/5 dark:inset-ring-white/10 dark:outline-indigo-500 dark:has-checked:bg-indigo-500">
+        <span className="size-5 rounded-full bg-white shadow-xs ring-1 ring-gray-900/5 transition-transform duration-200 ease-in-out group-has-checked:translate-x-5" />
+        <input id={fid} type="checkbox" role="switch" aria-describedby={description ? `${fid}-d` : undefined} className="absolute inset-0 size-full appearance-none focus:outline-hidden disabled:cursor-not-allowed" {...rest} />
+      </div>
+    </div>
+  );
+}
