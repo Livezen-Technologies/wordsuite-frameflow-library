@@ -131,11 +131,12 @@ export async function createServer({
 	state,
 	signingKey = process.env.LIBRARY_SIGNING_KEY || null,
 	tokens = parseTokens(process.env.LIBRARY_ADMIN_TOKENS),
+	requireProcessing = process.env.LIBRARY_REQUIRE_PROCESSING === "1",
 	oidc = process.env.LIBRARY_OIDC_ISSUER ? { issuer: process.env.LIBRARY_OIDC_ISSUER, audience: process.env.LIBRARY_OIDC_AUDIENCE || undefined, roleClaim: process.env.LIBRARY_OIDC_ROLE_CLAIM || undefined } : null,
 	fetch: fetchImpl,
 	now,
 } = {}) {
-	const lib = await createLibrary({ dataDir, signingKey, now, ...(blobs ? { blobs } : {}), ...(state ? { state } : {}) });
+	const lib = await createLibrary({ dataDir, signingKey, now, requireProcessing, ...(blobs ? { blobs } : {}), ...(state ? { state } : {}) });
 	const verifier = oidc ? createOidcVerifier({ ...oidc, fetch: fetchImpl, now: now ? () => now().getTime() : undefined }) : null;
 	/** Who is calling: a static token's admin, a verified OIDC user, or null. */
 	async function principalOf(req) {
@@ -213,6 +214,13 @@ export async function createServer({
 		["GET", `${A}/admin/categories`, ({ query }) => ({ data: lib.categories(query.get("type")) })],
 		["POST", `${A}/admin/categories`, async ({ req, actor }) => lib.createCategory(actor, await json(req))],
 		["GET", `${A}/admin/analytics/overview`, () => lib.overview()],
+		["GET", `${A}/admin/jobs`, ({ query }) => ({ data: lib.jobs({ status: query.get("status") }) })],
+		["POST", `${A}/admin/assets/:id/reprocess`, async ({ params, req, actor }) => lib.reprocess(actor, params.id, (await json(req)).version ?? null)],
+		// ---- processing workers (apps/workers); token role "worker"
+		["POST", `${A}/worker/jobs/claim`, ({ who }) => lib.claimJob(who)],
+		["GET", `${A}/worker/jobs/:id/files/:sha`, ({ params, who }) => lib.jobFile(who, params.id, params.sha)],
+		["PUT", `${A}/worker/jobs/:id/previews/:kind`, async ({ params, req, who, query }) => lib.putPreview(who, params.id, { kind: params.kind, ext: query.get("ext"), buf: await readBody(req, 50 * 1024 ** 2) })],
+		["POST", `${A}/worker/jobs/:id/complete`, async ({ params, req, who }) => lib.completeJob(who, params.id, await json(req))],
 		["GET", `${A}/admin/audit-log`, ({ query }) => ({ data: lib.auditLog({ entity_id: query.get("entity_id") }) })],
 	];
 	const ADMIN_READ = /^\/api\/v1\/admin\//;
@@ -248,6 +256,12 @@ export async function createServer({
 				return send(res, 200, f.text, { ...headers, "Content-Type": "application/json; charset=utf-8" });
 			}
 			if (pathname === "/feed/public-key.pem") return send(res, 200, lib.publicKey);
+			const preview = /^\/previews\/([0-9a-f-]{36})\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\/([a-z0-9_-]{1,32}\.[a-z0-9]{2,5})$/.exec(pathname);
+			if (preview && (req.method === "GET" || req.method === "HEAD")) {
+				const file = await lib.previewFile(preview[1], preview[2], preview[3]);
+				if (!file) return send(res, 404, "Not found");
+				return serveBlob(req, res, lib, file, { "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" });
+			}
 			if (pathname === "/healthz") return send(res, 200, { ok: true });
 			// ---- admin web
 			if (pathname === "/" || pathname === "/admin") return send(res, 302, "", { Location: "/admin/" });
@@ -269,6 +283,8 @@ export async function createServer({
 			const out = await hit.handler({ req, params: hit.params, query: url.searchParams, actor, who });
 			// Changes are stored before the response says they happened.
 			if (req.method !== "GET") await lib.flush();
+			if (out === null && req.method === "POST") return send(res, 204, "");
+			if (Buffer.isBuffer(out)) return send(res, 200, out, { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" });
 			const body = JSON.stringify(out);
 			if (req.method === "GET") {
 				const etag = `"${crypto.createHash("sha256").update(body).digest("hex").slice(0, 27)}"`;

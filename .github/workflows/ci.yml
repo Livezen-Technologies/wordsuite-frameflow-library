@@ -25,9 +25,16 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - name: Worker tools (FFmpeg, fonts, Chromium)
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fontconfig fonts-noto-core
+          npm ci --prefix apps/workers
+          npx --prefix apps/workers playwright install --with-deps chromium
       - run: npm test
         env:
           FRAMEFLOW_DIR: ${{ github.workspace }}/worksuite-frameflow
           LIBRARY_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/library_test
-      - name: Docker image builds
-        run: docker build -t frameflow-library .
+      - name: Docker images build
+        run: |
+          docker build -t frameflow-library .
+          docker build -f apps/workers/Dockerfile -t frameflow-library-worker .

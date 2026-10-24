@@ -48,6 +48,8 @@ export const ROLES = {
 	content_editor: ["asset.create", "asset.edit.own", "analytics.view.own"],
 	reviewer: ["asset.review", "analytics.view"],
 	analyst: ["analytics.view"],
+	/** Processing workers (apps/workers): claim jobs, read originals, store previews. */
+	worker: ["jobs.process"],
 };
 
 export function can(role, permission) {

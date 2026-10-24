@@ -1,0 +1,14 @@
+{
+	"name": "frameflow-library-workers",
+	"private": true,
+	"type": "module",
+	"description": "Processing workers for the FrameFlow Asset Library: previews, waveforms, specimens, LUT before/after, Lottie posters, deep checks.",
+	"engines": { "node": ">=22" },
+	"scripts": {
+		"start": "node src/worker.js"
+	},
+	"dependencies": {
+		"lottie-web": "5.13.0",
+		"playwright": "1.63.0"
+	}
+}

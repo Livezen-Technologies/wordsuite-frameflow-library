@@ -67,13 +67,20 @@ const DEFAULT_CATEGORIES = {
  * The library, loaded from `state` with files in `blobs` (storage.js).
  * Defaults: a JSON file and a folder under `dataDir`.
  */
-export async function createLibrary({ dataDir, signingKey = null, now = () => new Date(), blobs = createFileBlobs(dataDir), state = createFileState(path.join(dataDir, "library.json")) }) {
+/**
+ * `requireProcessing`: versions can't be published until a worker has
+ * processed them (previews, deep checks). Off by default so a library
+ * without workers still works; production sets LIBRARY_REQUIRE_PROCESSING=1.
+ */
+export async function createLibrary({ dataDir, signingKey = null, now = () => new Date(), blobs = createFileBlobs(dataDir), state = createFileState(path.join(dataDir, "library.json")), requireProcessing = false }) {
 	let db = await state.load();
 	if (!db) {
-		db = { seq: 0, assets: [], categories: [], uploads: {}, sync_events: [], audit_log: [], downloads: [], usage: [], collections: [] };
+		db = { seq: 0, assets: [], categories: [], uploads: {}, sync_events: [], audit_log: [], downloads: [], usage: [], collections: [], jobs: [] };
 		for (const [type, names] of Object.entries(DEFAULT_CATEGORIES))
 			names.forEach((name, i) => db.categories.push({ id: uuid7(), type, name, slug: slugify(name), parent_id: null, sort: i, icon: null, visible: true }));
 	}
+
+	db.jobs ??= [];
 
 	// Signing key: the configured PEM, else a development key kept with the
 	// state (a dev-signing-key.pem from older versions is picked up).
@@ -242,7 +249,132 @@ export async function createLibrary({ dataDir, signingKey = null, now = () => ne
 			created_at: iso(),
 		};
 		asset.versions.push(v);
+		if (v.status !== "failed") enqueueJob(asset, v);
 		return v;
+	}
+
+	// ---------- processing jobs (§5 stages 2–4, apps/workers) ----------
+
+	const JOB_LEASE_MS = 10 * 60 * 1000;
+	const JOB_MAX_ATTEMPTS = 3;
+	const PREVIEW_TYPES = { webp: "image/webp", png: "image/png", jpg: "image/jpeg", mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg", json: "application/json", woff2: "font/woff2" };
+
+	function enqueueJob(asset, v) {
+		const job = { id: uuid7(), asset_id: asset.id, version: v.version, type: asset.type, status: "queued", attempts: 0, lease_until: null, worker_id: null, error: null, previews: {}, created_at: iso(), started_at: null, finished_at: null };
+		db.jobs.push(job);
+		v.processing = { status: "queued", job_id: job.id };
+		return job;
+	}
+	const jobVersion = (job) => {
+		const asset = getAsset(job.asset_id);
+		return { asset, v: asset?.versions.find((x) => x.version === job.version) ?? null };
+	};
+	const mustJob = (actor, id) => {
+		const job = db.jobs.find((j) => j.id === id);
+		if (!job) throw notFound("Job");
+		if (job.status !== "running" || job.worker_id !== actor.id) throw new HttpError(409, "JOB_NOT_LEASED", "This job isn't leased to you.");
+		return job;
+	};
+
+	/** The oldest job a worker may take: queued, or running with an expired lease. */
+	function claimJob(actor) {
+		requirePerm(actor, "jobs.process");
+		const t = now().getTime();
+		const job = db.jobs.find((j) => j.status === "queued" || (j.status === "running" && new Date(j.lease_until).getTime() < t && j.attempts < JOB_MAX_ATTEMPTS));
+		if (!job) return null;
+		const { asset, v } = jobVersion(job);
+		if (!v) {
+			Object.assign(job, { status: "cancelled", finished_at: iso() });
+			save();
+			return claimJob(actor);
+		}
+		Object.assign(job, { status: "running", attempts: job.attempts + 1, worker_id: actor.id, lease_until: new Date(t + JOB_LEASE_MS).toISOString(), started_at: iso() });
+		v.processing = { status: "running", job_id: job.id };
+		save();
+		return { job: { id: job.id, attempt: job.attempts, lease_until: job.lease_until }, asset: { id: asset.id, type: asset.type, slug: asset.slug, title: asset.title, meta: { ...asset.meta, ...(v.meta ?? {}) } }, version: v.version, files: v.files.map(({ role, filename, sha256, size }) => ({ role, filename, sha256, size })) };
+	}
+
+	/** An original a leased job needs. */
+	async function jobFile(actor, id, sha) {
+		const job = mustJob(actor, id);
+		const { v } = jobVersion(job);
+		if (!v.files.some((f) => f.sha256 === sha)) throw notFound("File");
+		return readOriginal(sha);
+	}
+
+	async function putPreview(actor, id, { kind, ext, buf }) {
+		const job = mustJob(actor, id);
+		if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(kind ?? "")) throw new ValidationError("Bad preview kind.", [{ field: "kind", rule: "preview.kind", value: kind }]);
+		if (!PREVIEW_TYPES[ext]) throw new ValidationError("Unsupported preview format.", [{ field: "ext", rule: "preview.ext", value: ext }]);
+		if (!buf?.length || buf.length > 50 * 1024 ** 2) throw new ValidationError("Previews must be 1 byte to 50 MB.", [{ field: "file", rule: "preview.size", value: buf?.length ?? 0 }]);
+		const key = `previews/${job.asset_id}/${job.version}/${kind}.${ext}`;
+		await blobs.put(key, buf, PREVIEW_TYPES[ext]);
+		job.previews[kind] = { key, ext, size: buf.length, content_type: PREVIEW_TYPES[ext] };
+		// The generated thumbnail can go into packs, which read originals by sha.
+		if (kind === "thumbnail") {
+			const sha = sha256(buf);
+			if (!(await blobs.has(`originals/${sha}`))) await blobs.put(`originals/${sha}`, buf);
+			job.previews[kind].sha256 = sha;
+		}
+		job.lease_until = new Date(now().getTime() + JOB_LEASE_MS).toISOString();
+		save();
+		return job.previews[kind];
+	}
+
+	/**
+	 * Worker result. `checks` join the version's checks (a failed one blocks
+	 * publishing); `meta` is detected metadata; `ok: false` retries up to 3 attempts.
+	 */
+	function completeJob(actor, id, { ok = true, checks = [], meta = {}, error = null } = {}) {
+		const job = mustJob(actor, id);
+		const { asset, v } = jobVersion(job);
+		if (!ok) {
+			const retry = job.attempts < JOB_MAX_ATTEMPTS;
+			Object.assign(job, { status: retry ? "queued" : "failed", error: String(error ?? "Processing failed").slice(0, 2000), lease_until: null, worker_id: null, finished_at: retry ? null : iso() });
+			v.processing = { status: job.status, job_id: job.id, error: job.error };
+			save();
+			return job;
+		}
+		const clean = (Array.isArray(checks) ? checks : [])
+			.slice(0, 100)
+			.filter((c) => c && typeof c.check === "string")
+			.map((c) => ({ check: c.check.slice(0, 80), passed: !!c.passed, detail: c.detail && typeof c.detail === "object" ? c.detail : null, source: "worker" }));
+		v.checks = [...v.checks.filter((c) => c.source !== "worker"), ...clean];
+		v.meta = { ...(v.meta ?? {}), ...(meta && typeof meta === "object" ? meta : {}) };
+		v.previews = Object.fromEntries(Object.entries(job.previews).map(([k, p]) => [k, { key: p.key, ext: p.ext, size: p.size }]));
+		if (!asset.thumbnail_file && job.previews.thumbnail?.sha256) asset.thumbnail_file = { filename: "thumbnail.webp", sha256: job.previews.thumbnail.sha256, generated: true };
+		if (clean.some((c) => !c.passed)) {
+			v.status = "failed";
+			if (["draft", "ready_for_review", "processing"].includes(asset.status)) asset.status = "failed";
+		}
+		Object.assign(job, { status: "done", lease_until: null, finished_at: iso() });
+		v.processing = { status: "done", job_id: job.id, finished_at: job.finished_at };
+		audit(actor, "job.complete", "asset", asset.id, null, { version: v.version, checks: clean.length, previews: Object.keys(v.previews) });
+		save();
+		return job;
+	}
+
+	function reprocess(actor, assetId, version = null) {
+		const asset = mustAsset(assetId);
+		requirePerm(actor, "asset.edit", asset);
+		const v = asset.versions.find((x) => x.version === (version ?? asset.pending_version ?? asset.current_version));
+		if (!v) throw notFound("Version");
+		for (const j of db.jobs) if (j.asset_id === asset.id && j.version === v.version && ["queued", "running"].includes(j.status)) Object.assign(j, { status: "cancelled", finished_at: iso() });
+		const job = enqueueJob(asset, v);
+		audit(actor, "job.reprocess", "asset", asset.id, null, { version: v.version, job_id: job.id });
+		save();
+		return job;
+	}
+
+	/** Public bytes of a preview: { key, size, etag } or null. */
+	async function previewFile(assetId, version, file) {
+		const a = getAsset(assetId);
+		if (!a || !isLive(a)) return null;
+		const v = a.versions.find((x) => x.version === version);
+		const p = Object.values(v?.previews ?? {}).find((x) => x.key.endsWith(`/${file}`));
+		if (!p) return null;
+		const head = await blobs.head(p.key);
+		return head ? { key: p.key, ...head } : null;
 	}
 
 	async function createAsset(actor, body) {
@@ -408,6 +540,7 @@ export async function createLibrary({ dataDir, signingKey = null, now = () => ne
 		const v = asset.versions.find((x) => x.version === target) ?? (() => { throw notFound(`Version ${target}`); })();
 		const deps = (asset.dependencies ?? []).map((d) => getAsset(d.asset_id) ?? { id: d.asset_id, status: "missing" });
 		// A new version of a live asset is released by whoever may publish; first releases go through review.
+		if (requireProcessing && v.processing?.status !== "done") throw new ValidationError("This version is still being processed.", [{ field: "processing", rule: "processing.done", message: `Processing is ${v.processing?.status ?? "not started"}.` }], "PUBLISH_BLOCKED");
 		const probe = { ...asset, current_version: v.version, status: asset.pending_version === target && ["published", "deprecated"].includes(asset.status) ? "approved" : asset.status };
 		const problems = publishProblems(probe, { direct, dependencies: deps });
 		if (problems.length) throw new ValidationError(problems[0].message, problems, "PUBLISH_BLOCKED");
@@ -544,7 +677,8 @@ export async function createLibrary({ dataDir, signingKey = null, now = () => ne
 			meta: { ...a.meta, ...(v?.meta ?? {}) },
 			pack_id: packIdOf(a),
 			pack_type: ASSET_TYPES[a.type].pack,
-			thumbnail_url: v?.package?.thumbnail ? `/feed/stable/packs/${packIdOf(a)}-${v.version}${v.package.thumbnail.ext}` : null,
+			thumbnail_url: v?.previews?.thumbnail ? `/previews/${a.id}/${v.version}/thumbnail.${v.previews.thumbnail.ext}` : v?.package?.thumbnail ? `/feed/stable/packs/${packIdOf(a)}-${v.version}${v.package.thumbnail.ext}` : null,
+			preview: Object.fromEntries(Object.entries(v?.previews ?? {}).map(([k, p]) => [k, `/previews/${a.id}/${v.version}/${k}.${p.ext}`])),
 			published_at: a.published_at,
 			stats: a.stats,
 		};
@@ -769,6 +903,13 @@ export async function createLibrary({ dataDir, signingKey = null, now = () => ne
 			await state.close?.();
 		},
 		packageTier,
+		claimJob,
+		jobFile,
+		putPreview,
+		completeJob,
+		reprocess,
+		previewFile,
+		jobs: ({ status } = {}) => db.jobs.filter((j) => !status || j.status === status).slice(-200).reverse(),
 		verifyDownloadToken: (file, expires, sig) => {
 			try {
 				return new Date(expires) > now() && crypto.verify(null, Buffer.from(`${file}|${expires}`), crypto.createPublicKey(publicKey), Buffer.from(String(sig), "base64"));

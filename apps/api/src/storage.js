@@ -141,7 +141,7 @@ export function createFileState(file) {
 // ---------- state: PostgreSQL ----------
 
 /** Record collections and the field that keys each row. `uploads` is an id → record map. */
-const COLLECTIONS = { assets: "id", categories: "id", uploads: "id", sync_events: "seq", audit_log: "id", downloads: "id", usage: "id", collections: "slug" };
+const COLLECTIONS = { assets: "id", categories: "id", uploads: "id", sync_events: "seq", audit_log: "id", downloads: "id", usage: "id", collections: "slug", jobs: "id" };
 
 const SCHEMA = `
 create table if not exists library_records (
