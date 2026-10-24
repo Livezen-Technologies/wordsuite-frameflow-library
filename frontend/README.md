@@ -7,8 +7,7 @@ React 19 + TypeScript (strict) + Vite 7 + Tailwind CSS v4, React Router 7, TanSt
 | Public site | `/`, `/library`, `/library/category/:type`, `/library/:slug`, `/collections`, `/pricing`, `/download`, `/whats-new`, `/blog`, `/help`, `/creators`, `/about`, `/contact`, `/licence`, `/login`, `/signup`, `/account/*`, `/auth/callback` | FrameFlow Library design (Radiant look; `src/components/site/`, `src/pages/site/`). Editable copy with no API source: `src/content/site.ts`, `src/content/blog/*.md` |
 | Download Center admin (blueprint §11) | `/admin/*` (lazy chunk) | Tailwind Plus **Application UI v4.3** (`src/components/ui/`, `src/layouts/AdminLayout.tsx`), admin API `/api/v1/admin/*` |
 
-It talks to the Library API (`apps/api/src/server.js`, being ported to CodeIgniter in `backend/` with the same routes):
-bearer-token auth, errors as `{ error: { code, message, details[] } }`.
+It talks to the Library API (CodeIgniter, `backend/`): OIDC or bearer-token auth, errors as `{ error: { code, message, details[] } }`.
 
 ## Admin screens
 
@@ -39,9 +38,9 @@ npm run lint
 npm test              # Vitest + Testing Library (jsdom), fetch mocked
 ```
 
-Local API: `cd .. && PORT=8787 node apps/api/src/server.js` (dev token `dev-admin`). With previews: start the API with
+Local API: `cd ../backend && php spark serve --port 8787` (see `backend/README.md` for dev tokens). With previews: set
 `LIBRARY_ADMIN_TOKENS="dev-admin:super_admin:admin,wtok:worker:w1"` and run
-`LIBRARY_API_URL=http://localhost:8787 LIBRARY_WORKER_TOKEN=wtok node apps/workers/src/worker.js`.
+`LIBRARY_API_URL=http://localhost:8787 LIBRARY_WORKER_TOKEN=wtok node ../apps/workers/src/worker.js`.
 The dev/preview proxy and nginx forward `/api`, `/feed` and `/previews`.
 
 ## Environment (build time)
