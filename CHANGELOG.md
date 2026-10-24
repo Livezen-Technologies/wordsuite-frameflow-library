@@ -13,3 +13,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Download Center admin web (`/admin/`): Dashboard, Asset Library with type tabs, filters and bulk actions, Upload Center with drag and drop, per-file validation results and batch defaults, Asset Editor with checks, versions, rollback and publishing controls, Review Queue, Categories and Audit log.
 - `packages/asset-schema`: the 12 asset types, metadata rules, validators and FrameFlow pack mapping shared by every part of the library.
 - `packages/sdk-js`: a typed JavaScript client for the client API.
+- Transitions, filters, text templates and video templates are uploaded as JSON presets in the shapes FrameFlow's panels apply, and are checked against what FrameFlow can render. Choosing a type for an upload re-runs its checks for that type.

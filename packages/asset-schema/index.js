@@ -176,7 +176,7 @@ const EXPECT = {
 	ttf: ["ttf"], otf: ["otf"], woff2: ["woff2"],
 	cube: ["text"], "3dl": ["text"], ffcolor: ["json"],
 	json: ["json"], lottie: ["zip"],
-	fftext: ["zip", "json"], fftemplate: ["zip"], ffmotion: ["zip"], ffx: ["zip", "json"], ffbrand: ["zip", "json"],
+	fftext: ["zip", "json"], fftemplate: ["zip", "json"], ffmotion: ["zip"], ffx: ["zip", "json"], ffbrand: ["zip", "json"],
 };
 
 export const extOf = (name) => (String(name).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "");
@@ -189,7 +189,8 @@ export function detectType(filename, buf) {
 			const j = JSON.parse(buf.toString("utf8"));
 			if (j && typeof j === "object" && "v" in j && "layers" in j) return "lottie";
 			if (j?.schema === "frameflow.brand/1" || Array.isArray(j?.colors)) return "brand_kit";
-			if (j?.schema === "frameflow.text/1" || Array.isArray(j?.placeholders)) return "text_template";
+			if (j?.schema === "frameflow.text/1" || Array.isArray(j?.placeholders) || typeof j?.params?.content === "string") return "text_template";
+			if (Array.isArray(j?.layers) && j?.aspect) return "video_template";
 		} catch {
 			return null;
 		}
@@ -438,14 +439,39 @@ export function validateFile({ type, filename, buf }) {
 		for (const c of colors) if (!/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(c.hex ?? "")) throw new ValidationError("Brand kit colours must be hex.", [{ field: "colors", rule: "brand.hex", value: c.hex }]);
 		meta.colors = colors;
 		pass("brand.colors", { count: colors.length });
-	} else if (type === "text_template" && ext === "json") {
-		const j = JSON.parse(buf.toString("utf8"));
-		meta.placeholders = Array.isArray(j.placeholders) ? j.placeholders : [];
-		meta.font_refs = Array.isArray(j.font_refs) ? j.font_refs : [];
-		pass("manifest.schema");
+	} else if (["text_template", "video_template", "transition", "filter"].includes(type)) {
+		// FrameFlow applies these as JSON presets over its built-in renderers
+		// (see worksuite-frameflow apps/web/src/asset-library/pack-items.ts).
+		let j;
+		try {
+			j = JSON.parse(buf.toString("utf8"));
+		} catch {
+			throw new ValidationError(`Upload ${type.replace("_", " ")}s as a JSON preset in v1.`, [{ field: "file", rule: "preset.json", value: ext }]);
+		}
+		const bad = (rule, message) => {
+			throw new ValidationError(message, [{ field: "file", rule, value: null }]);
+		};
+		if (type === "text_template") {
+			if (typeof j?.params?.content !== "string") bad("text.params", "Text templates need params with a content string.");
+			meta.placeholders = Array.isArray(j.placeholders) ? j.placeholders : [];
+			meta.font_refs = Array.isArray(j.font_refs) ? j.font_refs : [];
+		} else if (type === "video_template") {
+			if (!Array.isArray(j?.layers) || !j.layers.length || typeof j?.aspect?.width !== "number" || typeof j?.aspect?.height !== "number") bad("template.layers", "Video templates need aspect (width, height) and layers.");
+			meta.scenes = j.layers.filter((l) => l.kind === "media").length;
+			meta.total_duration_ms = Math.round(Math.max(...j.layers.map((l) => (l.start ?? 0) + (l.duration ?? 0))) * 1000);
+		} else if (type === "transition") {
+			const v = j?.value ?? j;
+			if (!TRANSITION_ENGINES.includes(v?.type)) bad("transition.type", `Transition type must be one of FrameFlow's: ${TRANSITION_ENGINES.join(", ")}.`);
+			meta.render_engine = v.type;
+			meta.default_duration_ms = Math.round((v.duration ?? 0.8) * 1000);
+		} else if (!j?.grade || typeof j.grade !== "object" || !Object.keys(j.grade).length) bad("filter.grade", "Filters need a grade object (colour-grade params).");
+		pass("preset.schema");
 	}
 	return { meta, checks };
 }
+
+/** Transition renderers FrameFlow ships (worksuite-frameflow apps/web/src/transitions/types.ts). */
+export const TRANSITION_ENGINES = ["cross-dissolve", "dip-to-black", "blur-dissolve", "slide", "push", "wipe", "split", "circle", "iris-diamond", "zoom-in", "zoom-out", "spin", "whip-pan"];
 
 // ---------- publish gate (§4.3) ----------
 

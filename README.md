@@ -50,17 +50,24 @@ In production, sign with the release key (`LIBRARY_SIGNING_KEY`) and serve
 `/feed/` at FrameFlow's default `https://download.worksuitecloud.com/assets`;
 no app setting changes.
 
-How library assets land in FrameFlow:
+How library assets land in FrameFlow (each panel lists them under **Downloaded**):
 
-| Library type | FrameFlow pack type | Where it shows up |
-|---|---|---|
-| `lottie`, `motion` | `motion` | Animations library (`<slug>/<slug>.json` + thumbnail) |
-| `sfx` | `sounds` | Sounds → Packs |
-| `font` | `fonts` | Font list (registered as FontFace) |
-| `lut` | `luts` | LUT panel items |
-| `transition` / `filter` | `transitions` / `filters` | their panels |
-| `text_template` / `video_template` | `text-templates` / `video-templates` | template galleries |
-| `graphic` / `gif_sticker` / `brand_kit` | `graphics` / `stickers` / `brand-kits` | pack content for those panels |
+| Library type | Upload | FrameFlow pack type | Panel |
+|---|---|---|---|
+| `lottie`, `motion` | Bodymovin `.json` | `motion` | Animations library |
+| `sfx` | WAV, MP3, … | `sounds` | Audio → Packs |
+| `font` | TTF, OTF, WOFF2 | `fonts` | font list |
+| `lut` | `.cube` | `luts` | Colour → LUTs (Add imports it into your LUTs) |
+| `transition` | `.ffx` JSON `{ name, value: { type, duration?, easing?, direction?, alignment? } }` | `transitions` | Transitions (click to load, double-click to apply to the cut) |
+| `filter` | `.ffx` JSON `{ name, grade: { …colour-grade params }, extras? }` | `filters` | Filters (with the strength slider) |
+| `text_template` | `.json`/`.fftext` `{ name, params: { content, …text params } }` | `text-templates` | Text |
+| `video_template` | `.fftemplate` JSON: a FrameFlow project template (`aspect`, `layers`, `palette`, `category`) | `video-templates` | Templates |
+| `graphic`, `gif_sticker` | PNG, WebP, SVG, GIF, WebM, MOV | `graphics`, `stickers` | Elements (added at the playhead on its own layer) |
+| `brand_kit` | `.ffbrand`/`.json` `{ name, colors: [{ hex }], headingFont?, bodyFont? }` | `brand-kits` | Brand kit (Use, with undo) |
+
+FrameFlow has no custom-shader engine, so transitions and filters are presets
+over its built-in renderers; the upload checks reject a transition `type` or
+filter without a `grade` that FrameFlow can't apply.
 
 Each published asset is one pack (id = slug); licence tier `free` maps to
 plan `free`, everything else to `pro`. Every pack zip carries `pack.json`,

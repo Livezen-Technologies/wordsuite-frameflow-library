@@ -47,6 +47,16 @@ test("LUT validation: size, rows and range", () => {
 	assert.throws(() => parseCube(cube(17).replace("1.0000 1.0000 1.0000", "1.5 1 1")), (e) => e.details[0].rule === "lut.range");
 });
 
+test("preset types must match what FrameFlow can apply", async () => {
+	const { validateFile } = await import("../packages/asset-schema/index.js");
+	const j = (o) => Buffer.from(JSON.stringify(o));
+	assert.equal(validateFile({ type: "transition", filename: "a.ffx", buf: j({ value: { type: "wipe" } }) }).meta.render_engine, "wipe");
+	assert.throws(() => validateFile({ type: "transition", filename: "a.ffx", buf: j({ value: { type: "melt" } }) }), (e) => e.details[0].rule === "transition.type");
+	assert.throws(() => validateFile({ type: "filter", filename: "a.ffx", buf: j({ name: "x" }) }), (e) => e.details[0].rule === "filter.grade");
+	assert.throws(() => validateFile({ type: "text_template", filename: "a.json", buf: j({ placeholders: [] }) }), (e) => e.details[0].rule === "text.params");
+	assert.equal(validateFile({ type: "video_template", filename: "a.fftemplate", buf: j({ aspect: { width: 1920, height: 1080 }, layers: [{ kind: "media", slot: 0, start: 0, duration: 4 }] }) }).meta.total_duration_ms, 4000);
+});
+
 test("SVG and Lottie safety", () => {
 	assert.deepEqual(svgProblems('<svg><rect fill="#fff"/></svg>'), []);
 	const rules = svgProblems('<svg onload="x()"><script>1</script><image href="https://x/y.png"/><foreignObject/></svg>').map((p) => p.rule);
@@ -217,6 +227,7 @@ test("FrameFlow installs a published Lottie and LUT from this server", { skip: !
 	await publishOne("like_burst.json", Buffer.from(JSON.stringify(lottie)), { title: "Like Burst", tags: ["like"] });
 	await publishOne("warm.cube", Buffer.from(cube(17)), { title: "Warm Film" });
 	await publishOne("leak.png", png(1024, 576), { title: "Light Leak Overlay" });
+	await publishOne("glitch.ffx", Buffer.from(JSON.stringify({ name: "Glitch Push", value: { type: "push", duration: 0.4 } })), { type: "transition", title: "Glitch Push" });
 
 	const require = createRequire(import.meta.url);
 	const { createAssetStore } = require(storeFile);
@@ -225,11 +236,16 @@ test("FrameFlow installs a published Lottie and LUT from this server", { skip: !
 	const store = createAssetStore({ root, assetBase: `${s.base}/feed`, publicKey, appVersion: "9.9.9" });
 	const state = await store.refreshCatalog();
 	assert.equal(state.catalogStatus.state, "ready", state.catalogStatus.error);
-	assert.deepEqual(state.catalog.packs.map((p) => [p.id, p.type]), [["light-leak-overlay", "graphics"], ["like-burst", "motion"], ["warm-film", "luts"]]);
+	assert.deepEqual(state.catalog.packs.map((p) => [p.id, p.type]), [["glitch-push", "transitions"], ["light-leak-overlay", "graphics"], ["like-burst", "motion"], ["warm-film", "luts"]]);
 	await store.install("like-burst");
 	await store.install("warm-film");
 	await store.install("light-leak-overlay");
 	assert.equal(store.getState().installed["light-leak-overlay"].type, "graphics");
+	await store.install("glitch-push");
+	// The transitions panel reads the item's file as { name, value: ClipTransition }.
+	const fxIndex = JSON.parse(fs.readFileSync(path.join(root, "glitch-push", "1.0.0", "index.json"), "utf8"));
+	const preset = JSON.parse(fs.readFileSync(path.join(root, "glitch-push", "1.0.0", fxIndex.items[0].file), "utf8"));
+	assert.equal(preset.value.type, "push");
 	const installed = store.getState().installed;
 	assert.equal(installed["like-burst"].version, "1.0.0");
 	// The Lottie lands where FrameFlow's Animations library looks: <path>/<id>.json + thumbnail.png.

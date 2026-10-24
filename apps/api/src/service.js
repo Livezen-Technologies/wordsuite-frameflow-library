@@ -135,47 +135,60 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 
 	// ---------- uploads (§4.1) ----------
 
-	/** Stores raw bytes and runs the synchronous upload gate. */
-	function upload(actor, { filename, buf, type = null }) {
-		requirePerm(actor, "asset.create");
-		if (!filename || !buf?.length) throw new ValidationError("A file is required.", [{ field: "file", rule: "file.required", value: null }]);
-		const sha = sha256(buf);
-		const detected = type || detectType(filename, buf);
-		const checks = detected ? uploadChecks({ filename, type: detected, buf }) : [{ check: "type", passed: false, detail: { rule: "type.detect", value: extOf(filename) } }];
-		if (["zip"].includes(checks.find((c) => c.check === "magic_bytes")?.detail?.value)) {
+	/** Upload gate (§4.1) then type validation (§4.2) for `type`; returns { checks, meta }. */
+	function runChecks({ filename, buf, type }) {
+		const checks = type ? uploadChecks({ filename, type, buf }) : [{ check: "type", passed: false, detail: { rule: "type.detect", value: extOf(filename), message: "Pick a type for this file." } }];
+		if (checks.find((c) => c.check === "magic_bytes")?.detail?.value === "zip") {
 			try {
 				checks.push({ check: "archive", passed: true, detail: { entries: inspectZip(buf).length } });
 			} catch (e) {
 				checks.push({ check: "archive", passed: false, detail: { rule: e.rule, value: e.value ?? null, message: e.message } });
 			}
 		}
-		let detectedMeta = {};
-		if (detected && checks.every((c) => c.passed)) {
+		let meta = {};
+		if (type && checks.every((c) => c.passed)) {
 			try {
-				const { meta, checks: typeChecks } = validateFile({ type: detected, filename, buf });
-				checks.push(...typeChecks);
-				detectedMeta = meta;
+				const result = validateFile({ type, filename, buf });
+				checks.push(...result.checks);
+				meta = result.meta;
 			} catch (e) {
 				if (!(e instanceof ValidationError)) throw e;
 				checks.push({ check: e.details[0]?.rule ?? "type", passed: false, detail: { ...e.details[0], message: e.message } });
 			}
 		}
-		// Malware scanning (ClamAV) runs in the worker when CLAMAV_HOST is set; recorded as pending here.
+		// Malware scanning (ClamAV) runs in the worker when CLAMAV_HOST is set.
 		checks.push({ check: "malware_scan", passed: true, detail: { engine: process.env.CLAMAV_HOST ? "clamav" : "not-configured" } });
+		return { checks, meta };
+	}
+
+	/** Stores raw bytes and runs the checks for the given or detected type. */
+	function upload(actor, { filename, buf, type = null }) {
+		requirePerm(actor, "asset.create");
+		if (!filename || !buf?.length) throw new ValidationError("A file is required.", [{ field: "file", rule: "file.required", value: null }]);
+		const sha = sha256(buf);
+		const detected = type || detectType(filename, buf);
+		const { checks, meta } = runChecks({ filename, buf, type: detected });
 		const duplicate = db.assets.find((a) => a.versions.some((v) => v.files.some((f) => f.sha256 === sha)));
 		const id = uuid7();
-		db.uploads[id] = { id, filename, sha256: sha, size: buf.length, type: detected, checks, meta: detectedMeta, duplicate_of: duplicate?.id ?? null, created_by: actor.id, created_at: iso() };
+		db.uploads[id] = { id, filename, sha256: sha, size: buf.length, type: detected, checks, meta, duplicate_of: duplicate?.id ?? null, created_by: actor.id, created_at: iso() };
 		if (!fs.existsSync(dir("originals", sha))) fs.writeFileSync(dir("originals", sha), buf);
 		save();
 		return db.uploads[id];
+	}
+
+	/** An upload checked as `type`: re-validated when that isn't the type it was checked as. */
+	function uploadAs(id, type) {
+		const up = mustUpload(id);
+		if (!type || up.type === type) return up;
+		Object.assign(up, { type }, runChecks({ filename: up.filename, buf: readFile(up.sha256), type }));
+		return up;
 	}
 	const mustUpload = (id) => db.uploads[id] ?? (() => { throw notFound(`Upload ${id}`); })();
 
 	// ---------- assets ----------
 
 	function newVersion(asset, { version, uploadId, thumbnailUploadId, changelog = "", is_breaking = false, actor }) {
-		const up = mustUpload(uploadId);
-		if (up.type && up.type !== asset.type) throw new ValidationError(`That file looks like ${up.type}, not ${asset.type}.`, [{ field: "file", rule: "type.mismatch", value: up.type }]);
+		const up = uploadAs(uploadId, asset.type);
 		const files = [{ role: "main", filename: up.filename, sha256: up.sha256, size: up.size }];
 		if (thumbnailUploadId) {
 			const t = mustUpload(thumbnailUploadId);
@@ -206,8 +219,8 @@ export function createLibrary({ dataDir, signingKey = null, now = () => new Date
 
 	function createAsset(actor, body) {
 		requirePerm(actor, "asset.create");
-		const up = mustUpload(body.upload_id);
-		const type = body.type ?? up.type;
+		const type = body.type ?? mustUpload(body.upload_id).type;
+		const up = uploadAs(body.upload_id, type);
 		const title = body.title ?? up.filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
 		const slug = body.slug ?? slugify(title);
 		const category = body.category_id ? db.categories.find((c) => c.id === body.category_id) : db.categories.find((c) => c.type === type);
