@@ -1,0 +1,48 @@
+@import 'tailwindcss';
+
+/* Dark mode follows the OS (Tailwind Plus Application UI ships dark: variants on every component). */
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Radiant (public site) tokens. Only used through the `.radiant` scope and radiant-* utilities below. */
+  --font-switzer: Switzer, ui-sans-serif, system-ui, sans-serif;
+  --radius-4xl: 2rem;
+}
+
+@layer base {
+  :focus-visible {
+    outline-color: var(--color-indigo-600);
+  }
+}
+
+/* ---- Public site (Tailwind Plus Radiant) ----
+   Radiant's root font is Switzer and the page is light only; scope both to the public layout so the
+   admin keeps the Application UI look (system font, dark mode). */
+.radiant {
+  font-family: var(--font-switzer);
+  color-scheme: light;
+  background-color: white;
+  color: var(--color-gray-950);
+}
+.radiant :focus-visible {
+  outline: 2px solid var(--color-gray-950);
+  outline-offset: 2px;
+}
+
+@keyframes move-x {
+  0% {
+    transform: translateX(var(--move-x-from));
+  }
+  100% {
+    transform: translateX(var(--move-x-to));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
