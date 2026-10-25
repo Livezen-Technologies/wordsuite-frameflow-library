@@ -21,7 +21,7 @@ export function Thumb({ asset, className, children }: { asset: Pick<PublicAsset,
   const url = mediaUrl(asset.thumbnail_url ?? asset.preview?.thumbnail);
   return (
     <div className={clsx('thumb relative overflow-hidden', className)} style={gradient(asset.type)}>
-      {url ? <img src={url} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : asset.type === 'sfx' ? <div className="wave absolute inset-x-4 inset-y-6" /> : asset.type === 'font' ? <span className="absolute inset-0 grid place-items-center text-4xl font-semibold text-white">අආ Aa</span> : null}
+      {url ? <img onContextMenu={(e) => e.preventDefault()} src={url} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" /> : asset.type === 'sfx' ? <div className="wave absolute inset-x-4 inset-y-6" /> : asset.type === 'font' ? <span className="absolute inset-0 grid place-items-center text-4xl font-semibold text-white">අආ Aa</span> : null}
       {children}
     </div>
   );

@@ -47,7 +47,7 @@ export function PreviewGallery({ previews, title, tileClassName, captionClassNam
           <li key={k} className={clsx(wide && 'sm:col-span-2')}>
             <figure>
               {k === 'hover' || /^(mp4|webm)$/.test(ext) ? (
-                <video src={url} muted loop playsInline controls preload="metadata" aria-label={`${title}: ${previewLabel(k)}`} className={clsx(tileClassName, 'aspect-video w-full bg-black object-contain')} />
+                <video src={url} muted loop playsInline autoPlay controls preload="auto" onContextMenu={(e) => e.preventDefault()} controlsList="nodownload noplaybackrate" disablePictureInPicture aria-label={`${title}: ${previewLabel(k)}`} className={clsx(tileClassName, 'aspect-video w-full bg-black object-contain')} />
               ) : k === 'audio_preview' || ext === 'mp3' ? (
                 <div className={clsx(tileClassName, 'p-4')}>
                   {previews.waveform && <Waveform url={mediaUrl(previews.waveform)!} className="mb-3 text-current" />}

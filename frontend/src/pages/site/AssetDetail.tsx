@@ -77,6 +77,11 @@ export function AssetDetail() {
   const w = Number(a.meta?.width ?? NaN);
   const h = Number(a.meta?.height ?? NaN);
   const big = images[shot]?.[1];
+  /* The moving preview is the asset; a still of frame one is not. Where the
+     worker made a hover clip, that leads — playing by itself, muted and
+     looping, so the page shows the animation rather than a black box waiting
+     for a press. The still stays as the poster underneath it. */
+  const motion = Object.entries(media).find(([, u]) => /\.(mp4|webm|mov)$/i.test(u))?.[1];
 
   return (
     <div className="gut">
@@ -87,8 +92,23 @@ export function AssetDetail() {
         <div className="mt-6 grid gap-10 lg:grid-cols-[1fr_380px]">
           <div className="min-w-0">
             <div className="card p-2">
-              {big ? (
-                <img src={mediaUrl(big)!} alt={`${a.title}`} className="aspect-video w-full rounded-[1.6rem] object-cover" />
+              {motion ? (
+                <video
+                  src={mediaUrl(motion)!}
+                  poster={big ? mediaUrl(big)! : undefined}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  preload="auto"
+                  onContextMenu={(e) => e.preventDefault()}
+                  controlsList="nodownload noplaybackrate"
+                  disablePictureInPicture
+                  aria-label={a.title}
+                  className="aspect-video w-full rounded-[1.6rem] bg-gray-950 object-contain"
+                />
+              ) : big ? (
+                <img src={mediaUrl(big)!} alt={`${a.title}`} onContextMenu={(e) => e.preventDefault()} className="aspect-video w-full rounded-[1.6rem] object-cover" />
               ) : (
                 <Thumb asset={a} className="aspect-video rounded-[1.6rem]" />
               )}
@@ -102,8 +122,8 @@ export function AssetDetail() {
                 ))}
               </div>
             )}
-            {orderedKinds(media).some((k) => !/\.(webp|png|jpe?g|gif)$/i.test(media[k])) && (
-              <div className="mt-6"><PreviewGallery previews={Object.fromEntries(Object.entries(media).filter(([, u]) => !/\.(webp|png|jpe?g|gif)$/i.test(u)))} title={a.title} tileClassName="rounded-2xl ring-1 ring-black/10" captionClassName="mt-2 eyebrow" /></div>
+            {orderedKinds(media).some((k) => !/\.(webp|png|jpe?g|gif)$/i.test(media[k]) && media[k] !== motion) && (
+              <div className="mt-6"><PreviewGallery previews={Object.fromEntries(Object.entries(media).filter(([, u]) => !/\.(webp|png|jpe?g|gif)$/i.test(u) && u !== motion))} title={a.title} tileClassName="rounded-2xl ring-1 ring-black/10" captionClassName="mt-2 eyebrow" /></div>
             )}
             {a.description && (<><h2 className="mt-10 text-xl font-medium">{t('About this asset')}</h2><p className="mt-2 max-w-2xl text-gray-700">{a.description}</p></>)}
             {params.length > 0 && (
